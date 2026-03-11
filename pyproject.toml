@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agenticmemo"
+version = "0.1.0"
+description = "Advanced agentic learning framework with episodic memory, GRPO retrieval policy, and reflexion — no LLM fine-tuning required"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "AgentMemento Contributors" }]
+keywords = ["agent", "memory", "llm", "case-based-reasoning", "reinforcement-learning", "rag"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "numpy>=1.24",
+    "networkx>=3.0",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=2.2",
+    "httpx>=0.25",
+    "tenacity>=8.2",
+    "rich>=13.0",
+    "anyio>=4.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.34"]
+openai = ["openai>=1.0"]
+all = ["anthropic>=0.34", "openai>=1.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/agentmemento/agentmemento"
+Documentation = "https://agentmemento.readthedocs.io"
+Repository = "https://github.com/agentmemento/agentmemento"
+Issues = "https://github.com/agentmemento/agentmemento/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agenticmemo"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true

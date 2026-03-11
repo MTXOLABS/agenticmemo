@@ -401,51 +401,6 @@ Please open an issue first for significant changes so the approach can be discus
 
 ---
 
-## Roadmap
-
-- [x] Ensemble retrieval (semantic + BM25 + graph + temporal)
-- [x] GRPO retrieval policy
-- [x] Reflexion failure loop
-- [x] Hierarchical 4-layer memory (H-MEM)
-- [x] Temporal knowledge graph storage
-- [x] Multi-agent shared memory pool
-- [x] Hints internalization (Memento No More)
-- [ ] MCP (Model Context Protocol) tool integration
-- [ ] Memory visualisation dashboard
-- [ ] Async batch task processing
-- [ ] REST API server for remote agent deployment
-- [ ] LangChain / LlamaIndex adapter
-
----
-
-## Citation
-
-If you use AgenticMemo in your research, please cite the original Memento work this builds upon:
-
-```bibtex
-@article{memento2025,
-  title   = {Memento: Fine-tuning LLM Agents without Fine-tuning LLMs},
-  author  = {},
-  journal = {arXiv preprint arXiv:2508.16153},
-  year    = {2025}
-}
-
-@article{memento2_2025,
-  title   = {Memento 2: Learning by Stateful Reflective Memory},
-  author  = {},
-  journal = {arXiv preprint arXiv:2512.22716},
-  year    = {2025}
-}
-```
-
----
-
 ## License
 
 Released under the [MIT License](LICENSE).
-
----
-
-<div align="center">
-  <sub>Built with research from Memento, Reflexion, GRPO, H-MEM, and Zep.</sub>
-</div>

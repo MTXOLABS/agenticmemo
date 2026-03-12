@@ -277,7 +277,7 @@ class FailureMiner:
 
         all_new_patterns: list[FailurePattern] = []
 
-        for domain, domain_cases in by_domain.items():
+        for domain, domain_cases in list(by_domain.items()):
             if len(domain_cases) < self._min_cases:
                 # Pool into general batch
                 by_domain["general"].extend(domain_cases)

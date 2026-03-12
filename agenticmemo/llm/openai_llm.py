@@ -81,12 +81,20 @@ class OpenAILLM(LLMBackend):
                 else:
                     openai_msgs.append({"role": msg.role.value, "content": msg.content})
 
+            # Newer models (gpt-4.5+, o-series) require max_completion_tokens
+            _uses_completion_tokens = any(
+                self.model.startswith(p) for p in ("o1", "o3", "gpt-4.5", "gpt-5")
+            )
+            _token_key = "max_completion_tokens" if _uses_completion_tokens else "max_tokens"
+
             kwargs: dict[str, Any] = {
                 "model": self.model,
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
+                _token_key: self.max_tokens,
                 "messages": openai_msgs,
             }
+            # o-series models don't support temperature
+            if not _uses_completion_tokens:
+                kwargs["temperature"] = self.temperature
             if tools:
                 kwargs["tools"] = [{"type": "function", "function": t} for t in tools]
                 kwargs["tool_choice"] = "auto"

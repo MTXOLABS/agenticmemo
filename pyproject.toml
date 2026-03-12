@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agenticmemo"
-version = "0.1.0"
-description = "Advanced agentic learning framework with episodic memory, GRPO retrieval policy, and reflexion — no LLM fine-tuning required"
+version = "2.0.0"
+description = "Memory-augmented LLM agents with DMER, CFM, and ESMC — no fine-tuning required"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "AgentMemento Contributors" }]
+authors = [{ name = "MTXOLABS" }]
 keywords = ["agent", "memory", "llm", "case-based-reasoning", "reinforcement-learning", "rag"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -48,10 +48,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/agentmemento/agentmemento"
-Documentation = "https://agentmemento.readthedocs.io"
-Repository = "https://github.com/agentmemento/agentmemento"
-Issues = "https://github.com/agentmemento/agentmemento/issues"
+Homepage = "https://github.com/MTXOLABS/agenticmemo"
+Repository = "https://github.com/MTXOLABS/agenticmemo"
+Issues = "https://github.com/MTXOLABS/agenticmemo/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agenticmemo"]

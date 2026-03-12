@@ -1,3 +1,3 @@
-__version__ = "0.1.0"
-__author__ = "AgentMemento Contributors"
+__version__ = "2.0.0"
+__author__ = "MTXOLABS"
 __license__ = "MIT"

@@ -74,6 +74,10 @@ from .tasks import (
     HARD_FAILURE_TASKS,
     FAILURE_TASKS,
     MULTIAGENT_TASKS,
+    ALL_DOMAIN_TASKS,
+    ALL_DOMAIN_REPEAT_TASKS,
+    FINANCE_TASKS,
+    REAL_ESTATE_TASKS,
     BenchTask,
 )
 
@@ -124,6 +128,8 @@ class TaskResult:
     duration_ms: float
     reward: float
     reflexion_triggered: bool = False
+    steps_detail: list[dict] = field(default_factory=list)   # full step trace
+    final_answer: str = ""
 
 
 @dataclass
@@ -168,7 +174,7 @@ def _build_llm(provider: str, api_key: str | None, model: str | None):
         return AnthropicLLM(model=model or "claude-sonnet-4-6", api_key=api_key)
     if provider == "openai":
         from agenticmemo.llm.openai_llm import OpenAILLM  # noqa: PLC0415
-        return OpenAILLM(model=model or "gpt-5-mini-2025-08-07", api_key=api_key)
+        return OpenAILLM(model=model or "gpt-5.4", api_key=api_key)
     return MockLLM(fail_rate=0.0)
 
 
@@ -262,7 +268,7 @@ def make_agent(
     if provider == "anthropic":
         agent = Agent.from_anthropic(api_key=api_key, model=model or "claude-sonnet-4-6", cfg=cfg)
     elif provider == "openai":
-        agent = Agent.from_openai(api_key=api_key, model=model or "gpt-4o", cfg=cfg)
+        agent = Agent.from_openai(api_key=api_key, model=model or "gpt-5.4", cfg=cfg)
     else:
         agent = Agent(MockLLM(fail_rate=fail_rate), cfg)
     agent.add_tool(PythonReplTool())
@@ -275,14 +281,32 @@ async def run_task(agent: Agent, bench: BenchTask) -> TaskResult:
     duration = (time.time() - t0) * 1000
     from agenticmemo.learning.filters import TrajectoryFilter  # noqa: PLC0415
     reward = TrajectoryFilter().assign_reward(traj)
+
+    # Record full step trace for analysis
+    steps_detail = []
+    for s in traj.steps:
+        step_record: dict = {
+            "index": s.index,
+            "thought": s.thought,
+            "observation": s.observation[:500] if s.observation else "",
+        }
+        if s.tool_call:
+            step_record["tool"] = s.tool_call.name
+            step_record["tool_args"] = {
+                k: str(v)[:200] for k, v in s.tool_call.arguments.items()
+            }
+        steps_detail.append(step_record)
+
     return TaskResult(
-        task=bench.task[:70],
+        task=bench.task[:120],
         status=traj.status.value,
         steps=traj.num_steps,
         tokens=traj.total_tokens,
         duration_ms=duration,
         reward=reward,
         reflexion_triggered=bool(traj.reflection),
+        steps_detail=steps_detail,
+        final_answer=traj.final_answer[:300] if traj.final_answer else "",
     )
 
 
@@ -568,15 +592,92 @@ async def research_hard_reflexion(
     return result
 
 
+async def research_domain_finance(
+    config_label: str, provider: str, api_key: str | None,
+    agenticmemo: bool, model: str | None,
+) -> SuiteResult:
+    """Domain Suite: 6 finance tasks (DCF, Sharpe, Monte Carlo, VaR, Black-Scholes, SMA)."""
+    result = SuiteResult(name="Finance Domain", config_label=config_label)
+
+    if agenticmemo:
+        agent = make_agenticmemo_agent(provider, api_key, model)
+    else:
+        agent = make_standalone_agent(provider, api_key, model)
+
+    console.print(f"  [dim][{config_label}] {len(FINANCE_TASKS)} finance tasks...[/]")
+    for bench in FINANCE_TASKS:
+        r = await run_task(agent, bench)
+        result.task_results.append(r)
+
+    result.finish()
+    result.extra["domain"] = "finance"
+    return result
+
+
+async def research_domain_real_estate(
+    config_label: str, provider: str, api_key: str | None,
+    agenticmemo: bool, model: str | None,
+) -> SuiteResult:
+    """Domain Suite: 6 real estate tasks (cap rate, mortgage, IRR, BRRRR, CMA, occupancy)."""
+    result = SuiteResult(name="Real Estate Domain", config_label=config_label)
+
+    if agenticmemo:
+        agent = make_agenticmemo_agent(provider, api_key, model)
+    else:
+        agent = make_standalone_agent(provider, api_key, model)
+
+    console.print(f"  [dim][{config_label}] {len(REAL_ESTATE_TASKS)} real estate tasks...[/]")
+    for bench in REAL_ESTATE_TASKS:
+        r = await run_task(agent, bench)
+        result.task_results.append(r)
+
+    result.finish()
+    result.extra["domain"] = "real_estate"
+    return result
+
+
+async def research_domain_transfer(
+    config_label: str, provider: str, api_key: str | None,
+    agenticmemo: bool, model: str | None,
+) -> SuiteResult:
+    """Domain Suite: memory transfer — warmup on domain tasks, test on repeat variants."""
+    result = SuiteResult(name="Domain Memory Transfer", config_label=config_label)
+
+    if agenticmemo:
+        agent = make_agenticmemo_agent(provider, api_key, model)
+    else:
+        agent = make_standalone_agent(provider, api_key, model)
+
+    # Warmup on all domain tasks
+    console.print(f"  [dim][{config_label}] Warmup: {len(ALL_DOMAIN_TASKS)} domain tasks...[/]")
+    for bench in ALL_DOMAIN_TASKS:
+        await run_task(agent, bench)
+
+    # Test on transfer tasks (new phrasings, same domain knowledge)
+    console.print(f"  [dim][{config_label}] Transfer: {len(ALL_DOMAIN_REPEAT_TASKS)} repeat tasks...[/]")
+    for bench in ALL_DOMAIN_REPEAT_TASKS:
+        r = await run_task(agent, bench)
+        result.task_results.append(r)
+
+    result.finish()
+    result.extra["domain"] = "multi-domain"
+    result.extra["warmup_tasks"] = len(ALL_DOMAIN_TASKS)
+    result.extra["transfer_tasks"] = len(ALL_DOMAIN_REPEAT_TASKS)
+    return result
+
+
 RESEARCH_SUITE_MAP = {
-    "core":         research_core,
-    "memory":       research_memory_transfer,
-    "reflexion":    research_reflexion,
-    "efficiency":   research_efficiency,
-    "retrieval":    research_retrieval,
-    "hard_core":    research_hard_core,
-    "hard_transfer":research_hard_transfer,
-    "hard_reflexion":research_hard_reflexion,
+    "core":           research_core,
+    "memory":         research_memory_transfer,
+    "reflexion":      research_reflexion,
+    "efficiency":     research_efficiency,
+    "retrieval":      research_retrieval,
+    "hard_core":      research_hard_core,
+    "hard_transfer":  research_hard_transfer,
+    "hard_reflexion": research_hard_reflexion,
+    "domain_finance":     research_domain_finance,
+    "domain_real_estate": research_domain_real_estate,
+    "domain_transfer":    research_domain_transfer,
 }
 
 # Legacy suites for --compare / --provider modes
@@ -888,11 +989,14 @@ async def run_research(args: argparse.Namespace) -> None:
         else:
             console.print(f"[yellow]Skipping '{label}' — no API key for {provider}[/]")
 
-    _hard_suites = ["hard_core", "hard_transfer", "hard_reflexion"]
+    _hard_suites   = ["hard_core", "hard_transfer", "hard_reflexion"]
+    _domain_suites = ["domain_finance", "domain_real_estate", "domain_transfer"]
     if args.suite == "all":
         suites_to_run = list(RESEARCH_SUITE_MAP.items())
     elif args.suite == "hard":
         suites_to_run = [(s, RESEARCH_SUITE_MAP[s]) for s in _hard_suites]
+    elif args.suite == "domain":
+        suites_to_run = [(s, RESEARCH_SUITE_MAP[s]) for s in _domain_suites]
     else:
         suites_to_run = [(args.suite, RESEARCH_SUITE_MAP[args.suite])]
     suite_names = [s for s, _ in suites_to_run]
@@ -953,6 +1057,20 @@ async def run_research(args: argparse.Namespace) -> None:
                         "avg_reward": round(r.avg_reward, 4),
                         "extra": {k: v for k, v in r.extra.items()
                                   if not isinstance(v, list)},
+                        "task_results": [
+                            {
+                                "task": tr.task,
+                                "status": tr.status,
+                                "steps": tr.steps,
+                                "tokens": tr.tokens,
+                                "duration_ms": round(tr.duration_ms, 1),
+                                "reward": round(tr.reward, 4),
+                                "reflexion_triggered": tr.reflexion_triggered,
+                                "final_answer": tr.final_answer,
+                                "steps_detail": tr.steps_detail,
+                            }
+                            for tr in r.task_results
+                        ],
                     }
                     for sname, r in suite_results.items()
                 }
@@ -1052,7 +1170,7 @@ async def run_compare(args: argparse.Namespace) -> None:
 async def run_single(args: argparse.Namespace) -> None:
     model_label = args.model or (
         "claude-sonnet-4-6" if args.provider == "anthropic"
-        else "gpt-4o" if args.provider == "openai"
+        else "gpt-5.4" if args.provider == "openai"
         else "mock-llm-v1"
     )
     console.print(Panel(
@@ -1148,7 +1266,7 @@ def parse_args() -> argparse.Namespace:
 
     # ── Common ───────────────────────────────────────────────────────────────
     p.add_argument("--suite", default="all",
-                   choices=["all", "hard"] + list(RESEARCH_SUITE_MAP),
+                   choices=["all", "hard", "domain"] + list(RESEARCH_SUITE_MAP),
                    help="Suite to run (default: all; 'hard' = hard_core+hard_transfer+hard_reflexion)")
     p.add_argument("--output", default=None, metavar="FILE",
                    help="Save JSON report to FILE")

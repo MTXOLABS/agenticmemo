@@ -15,7 +15,6 @@ hint extraction, quality filter — with zero API calls.
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import Any
 
@@ -23,7 +22,6 @@ import numpy as np
 
 from agenticmemo.llm.base import LLMBackend
 from agenticmemo.types import LLMResponse, Message, ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Python snippets the executor will "generate" and run via python_repl

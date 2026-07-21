@@ -30,6 +30,11 @@ class BenchTask:
     category: str
     expected_keywords: list[str] = field(default_factory=list)
     domain: str = "coding"
+    # Deterministic grading (Phase 5.1): numeric values that MUST appear in
+    # the agent's output (any scale/percent representation, ±1.5%). Graded
+    # mechanically — no LLM judge, no run-to-run noise. Only include values
+    # that are convention-independent (unique mathematical answers).
+    expected_numbers: list[float] = field(default_factory=list)
 
 
 MATH_TASKS: list[BenchTask] = [
@@ -318,6 +323,7 @@ FINANCE_TASKS: list[BenchTask] = [
         "Compute WACC, each year's FCF, terminal value, enterprise value, and equity value. "
         "Also compute EV/EBITDA assuming EBITDA=$120M. Print all intermediate steps.",
         "finance", ["wacc", "dcf", "terminal_value", "ev_ebitda"], domain="finance",
+        expected_numbers=[9.396, 12.3, 2715.2, 22.63],
     ),
     BenchTask(
         "Implement full Markowitz mean-variance portfolio optimization WITHOUT scipy. "
@@ -327,6 +333,7 @@ FINANCE_TASKS: list[BenchTask] = [
         "(3) portfolio targeting 13% return. Print weights, expected return, volatility, Sharpe for each. "
         "Enforce weights sum to 1 and are non-negative.",
         "finance", ["markowitz", "efficient_frontier", "sharpe", "gradient_descent"], domain="finance",
+        expected_numbers=[13.13, 0.635],
     ),
     BenchTask(
         "Implement a full Monte Carlo VaR and CVaR engine: "
@@ -425,6 +432,7 @@ REAL_ESTATE_TASKS: list[BenchTask] = [
         "Compute year-by-year distribution to LP and GP, IRR for each, equity multiple. "
         "Show full waterfall table.",
         "real_estate", ["waterfall", "preferred_return", "gp_catch_up", "irr", "equity_multiple"], domain="real_estate",
+        expected_numbers=[14_000_000, 1.573],
     ),
     BenchTask(
         "Build a complete real estate development pro forma: "
@@ -549,6 +557,7 @@ FINANCE_REPEAT_TASKS: list[BenchTask] = [
         "debt paydown schedule, credit metrics (Net Debt/EBITDA). "
         "At what year does leverage return to pre-recap level? Print full model.",
         "finance", ["leveraged_recap", "credit_metrics", "deleveraging", "fcf"], domain="finance",
+        expected_numbers=[26.25, 4.375, 86.4],
     ),
     BenchTask(
         "Implement a convertible bond pricing model: "

@@ -48,39 +48,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
-from rich import box
 
 console = Console()
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agenticmemo import Agent, AgentConfig, LearningConfig, MemoryConfig, RetrievalConfig
-from agenticmemo.memory.case import Case, CaseOutcome
-from agenticmemo.memory.shared import SharedMemoryPool
 from agenticmemo.retrieval.ensemble import EnsembleRetriever
 from agenticmemo.tools import PythonReplTool
-from agenticmemo.types import TaskStatus, Trajectory
 
 from .mock_llm import MockLLM
 from .tasks import (
+    ALL_DOMAIN_REPEAT_TASKS,
+    ALL_DOMAIN_TASKS,
+    ALL_HARD_REPEAT_TASKS,
+    ALL_HARD_TASKS,
     ALL_REPEAT_TASKS,
     ALL_SOLO_TASKS,
-    ALL_HARD_TASKS,
-    ALL_HARD_REPEAT_TASKS,
-    HARD_FAILURE_TASKS,
     FAILURE_TASKS,
-    MULTIAGENT_TASKS,
-    ALL_DOMAIN_TASKS,
-    ALL_DOMAIN_REPEAT_TASKS,
     FINANCE_TASKS,
+    HARD_FAILURE_TASKS,
     REAL_ESTATE_TASKS,
     BenchTask,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration identifiers

@@ -93,7 +93,7 @@ class OpenAIEmbeddings(EmbeddingBackend):
             self._client = openai.AsyncOpenAI(api_key=self._api_key)
         except ImportError as e:
             raise EmbeddingError(
-                "openai not installed. Run: pip install agentmemento[openai]"
+                "openai not installed. Run: pip install agenticmemo[openai]"
             ) from e
 
     async def encode(self, texts: list[str]) -> np.ndarray:

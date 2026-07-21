@@ -22,18 +22,16 @@ but extended with causal chain extraction and cross-episode clustering.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..llm.base import LLMBackend
 from ..memory.case import Case
 from ..types import TaskStatus
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data models
@@ -59,8 +57,8 @@ class FailurePattern:
     support: int = 1        # Number of supporting failure cases
     avg_depth: float = 0.0  # Average step at which failure occurs
     source_case_ids: list[str] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    last_updated: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_prompt_block(self) -> str:
         """Render as a negative example for the planner."""
@@ -111,7 +109,7 @@ class FailurePatternBank:
             existing_id = self._fingerprints[fp]
             if existing_id in self._patterns:
                 self._patterns[existing_id].support += pattern.support
-                self._patterns[existing_id].last_updated = datetime.utcnow().isoformat()
+                self._patterns[existing_id].last_updated = datetime.now(timezone.utc).isoformat()
             if self._persist_path:
                 self._save()
             return False
@@ -157,7 +155,9 @@ class FailurePatternBank:
         from pathlib import Path  # noqa: PLC0415
         p = Path(self._persist_path)  # type: ignore[arg-type]
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps([pt.to_dict() for pt in self._patterns.values()], default=str))
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps([pt.to_dict() for pt in self._patterns.values()], default=str))
+        tmp.replace(p)
 
     def _load(self, path: str) -> None:
         import json  # noqa: PLC0415
@@ -179,7 +179,7 @@ class FailurePatternBank:
     def _fingerprint(p: FailurePattern) -> str:
         """MD5 of normalized (trigger + mistake) for dedup."""
         raw = (p.trigger.lower().strip()[:80] + "|" + p.mistake.lower().strip()[:80])
-        return hashlib.md5(raw.encode()).hexdigest()
+        return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,7 +196,8 @@ A failure pattern captures:
 - CONSEQUENCE: what went wrong as a result
 - FIX: what the agent SHOULD have done instead (the counterfactual correction)
 
-Good patterns are GENERAL (apply to many tasks), CAUSAL (explain WHY it failed), and ACTIONABLE (give a clear fix).
+Good patterns are GENERAL (apply to many tasks), CAUSAL (explain WHY it failed),
+and ACTIONABLE (give a clear fix).
 
 Bad patterns are too specific ("For task X, the agent did Y") — they won't generalize.
 """
@@ -343,7 +344,7 @@ class FailureMiner:
                     len(c.trajectory.steps) / 2 for c in cases
                 ) / max(1, len(cases))
                 p = FailurePattern(
-                    id=hashlib.md5(
+                    id=hashlib.md5(  # fingerprint only, not cryptographic
                         (domain + item.get("trigger", "") + item.get("mistake", "")).encode()
                     ).hexdigest()[:12],
                     domain=domain,

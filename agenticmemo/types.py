@@ -1,13 +1,12 @@
-"""Core type definitions for AgentMemento."""
+"""Core type definitions for AgenticMemo."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -53,7 +52,7 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     tool_name: str | None = None
     # Populated on ASSISTANT messages that contain tool calls (needed for Anthropic/OpenAI)
-    tool_calls: list["ToolCall"] = Field(default_factory=list)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -107,6 +106,7 @@ class Trajectory(BaseModel):
     duration_ms: float = 0.0
     reflection: str = ""           # filled by ReflexionEngine on failure
     reward: float = 0.0            # filled by outcome evaluator
+    metadata: dict[str, Any] = Field(default_factory=dict)  # e.g. token_breakdown
 
     def add_step(self, step: Step) -> None:
         self.steps.append(step)

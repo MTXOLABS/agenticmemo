@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,9 +52,18 @@ class TemporalGraphMemory(MemoryBackend):
         self.max_cases = max_cases
         self.decay_rate = temporal_decay_rate
         self.max_edges = max_edges_per_node
+        self._pagerank_cache: dict[str, float] | None = None
         self._persist_path = Path(persist_path) if persist_path else None
-        if self._persist_path and self._persist_path.exists():
-            self._load()
+        # SQLite backend (path ending in .db): incremental single-row writes
+        # instead of rewriting the whole JSON on every store — O(1) vs O(N).
+        self._sqlite = None
+        if self._persist_path and self._persist_path.suffix == ".db":
+            self._sqlite = self._open_sqlite(self._persist_path)
+        if self._persist_path:
+            if self._sqlite is not None:
+                self._load_sqlite()
+            elif self._persist_path.exists():
+                self._load()
 
     # ------------------------------------------------------------------ #
     # MemoryBackend interface
@@ -67,8 +75,15 @@ class TemporalGraphMemory(MemoryBackend):
 
         self._cases[case.id] = case
         self._graph.add_node(case.id, **self._node_attrs(case))
+        self._pagerank_cache = None
 
-        if self._persist_path:
+        if self._sqlite is not None:
+            self._sqlite.execute(
+                "INSERT OR REPLACE INTO cases (id, data) VALUES (?, ?)",
+                (case.id, json.dumps(case.model_dump(mode="json"), default=str)),
+            )
+            self._sqlite.commit()
+        elif self._persist_path:
             self._save()
 
     async def get(self, case_id: str) -> Case | None:
@@ -82,6 +97,13 @@ class TemporalGraphMemory(MemoryBackend):
             return False
         del self._cases[case_id]
         self._graph.remove_node(case_id)
+        self._pagerank_cache = None
+        if self._sqlite is not None:
+            self._sqlite.execute("DELETE FROM cases WHERE id = ?", (case_id,))
+            self._sqlite.execute(
+                "DELETE FROM edges WHERE src = ? OR dst = ?", (case_id, case_id)
+            )
+            self._sqlite.commit()
         return True
 
     async def all_cases(self) -> list[Case]:
@@ -107,6 +129,13 @@ class TemporalGraphMemory(MemoryBackend):
         if self._graph.out_degree(src_id) >= self.max_edges:
             return
         self._graph.add_edge(src_id, dst_id, type=edge_type, weight=weight)
+        self._pagerank_cache = None
+        if self._sqlite is not None:
+            self._sqlite.execute(
+                "INSERT OR REPLACE INTO edges (src, dst, type, weight) VALUES (?, ?, ?, ?)",
+                (src_id, dst_id, edge_type, weight),
+            )
+            self._sqlite.commit()
 
     def neighbors(self, case_id: str, edge_type: str | None = None) -> list[Case]:
         """Return cases connected to the given case (1-hop)."""
@@ -132,10 +161,17 @@ class TemporalGraphMemory(MemoryBackend):
         return math.exp(-self.decay_rate * case.age_days)
 
     def pagerank_scores(self) -> dict[str, float]:
-        """PageRank over the case graph — highly referenced cases score higher."""
+        """PageRank over the case graph — highly referenced cases score higher.
+
+        Cached until the graph mutates: retrieval runs on every agent step
+        (plus DMER refreshes), and recomputing PageRank each time was the
+        hot-path cost at scale (Phase 4.3).
+        """
         if len(self._graph) == 0:
             return {}
-        return nx.pagerank(self._graph, weight="weight")
+        if self._pagerank_cache is None:
+            self._pagerank_cache = nx.pagerank(self._graph, weight="weight")
+        return self._pagerank_cache
 
     # ------------------------------------------------------------------ #
     # Domain filtering
@@ -148,6 +184,36 @@ class TemporalGraphMemory(MemoryBackend):
     # Persistence
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _open_sqlite(path: Path):
+        import sqlite3  # noqa: PLC0415
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        conn.execute("CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, data TEXT)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS edges "
+            "(src TEXT, dst TEXT, type TEXT, weight REAL, PRIMARY KEY (src, dst))"
+        )
+        conn.commit()
+        return conn
+
+    def _load_sqlite(self) -> None:
+        try:
+            for (data,) in self._sqlite.execute("SELECT data FROM cases"):
+                case = Case.model_validate(json.loads(data))
+                self._cases[case.id] = case
+                self._graph.add_node(case.id, **self._node_attrs(case))
+            for src, dst, etype, weight in self._sqlite.execute(
+                "SELECT src, dst, type, weight FROM edges"
+            ):
+                if src in self._graph and dst in self._graph:
+                    self._graph.add_edge(src, dst, type=etype, weight=weight)
+        except Exception as e:
+            raise MemoryError(
+                f"Failed to load memory from {self._persist_path}: {e}"
+            ) from e
+
     def _save(self) -> None:
         if not self._persist_path:
             return
@@ -159,7 +225,10 @@ class TemporalGraphMemory(MemoryBackend):
                 for u, v, d in self._graph.edges(data=True)
             ],
         }
-        self._persist_path.write_text(json.dumps(data, default=str))
+        # Atomic write: a crash mid-write must not corrupt the memory file
+        tmp = self._persist_path.with_suffix(self._persist_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, default=str))
+        tmp.replace(self._persist_path)
 
     def _load(self) -> None:
         try:
@@ -188,11 +257,22 @@ class TemporalGraphMemory(MemoryBackend):
         }
 
     async def _evict_oldest(self) -> None:
-        """Remove the oldest, least-accessed case when at capacity."""
+        """Quality-aware eviction (Phase 4.2).
+
+        Evict lowest-value first: failures before successes, low reward
+        before high, then least-accessed/oldest. Solution-bearing successes
+        are the most valuable memory (they power exemplar injection) and are
+        only evicted when nothing else is left.
+        """
         if not self._cases:
             return
-        oldest = min(
+        victim = min(
             self._cases.values(),
-            key=lambda c: (c.access_count, c.created_at),
+            key=lambda c: (
+                c.is_success and bool(c.solution),   # protected class last
+                c.outcome.reward,
+                c.access_count,
+                c.created_at,
+            ),
         )
-        await self.delete(oldest.id)
+        await self.delete(victim.id)

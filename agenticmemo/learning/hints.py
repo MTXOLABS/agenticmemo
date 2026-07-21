@@ -22,15 +22,15 @@ hold across many tasks, not just specific past trajectories.
 from __future__ import annotations
 
 import json
-from collections import Counter
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from ..llm.base import LLMBackend
 from ..memory.case import Case
 from ..types import Message, MessageRole
-
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -53,12 +53,35 @@ class HintLibrary(BaseModel):
     """Persistent store of extracted hints."""
 
     hints: list[Hint] = Field(default_factory=list)
+    persist_path: str | None = Field(default=None, exclude=True)
 
     def add(self, hint: Hint) -> None:
         # Avoid exact duplicates
         existing_texts = {h.text.lower().strip() for h in self.hints}
         if hint.text.lower().strip() not in existing_texts:
             self.hints.append(hint)
+            self._save()
+
+    def load(self) -> None:
+        """Restore hints from persist_path (no-op if unset or missing)."""
+        if not self.persist_path:
+            return
+        p = Path(self.persist_path)
+        if not p.exists():
+            return
+        try:
+            self.hints = [Hint.model_validate(d) for d in json.loads(p.read_text())]
+        except Exception:
+            pass  # corrupt file — start fresh
+
+    def _save(self) -> None:
+        if not self.persist_path:
+            return
+        p = Path(self.persist_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps([h.model_dump(mode="json") for h in self.hints]))
+        tmp.replace(p)
 
     def by_domain(self, domain: str) -> list[Hint]:
         return [h for h in self.hints if h.domain == domain or h.domain == "general"]
@@ -179,7 +202,7 @@ class HintExtractor:
             if not isinstance(text, str) or not text.strip():
                 continue
             hint = Hint(
-                id=f"hint_{domain}_{len(self.library.hints)}",
+                id=f"hint_{domain}_{uuid.uuid4().hex[:8]}",
                 domain=domain,
                 text=text.strip(),
                 source_case_ids=[c.id for c in eligible],

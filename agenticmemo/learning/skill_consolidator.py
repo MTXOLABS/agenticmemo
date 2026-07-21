@@ -29,13 +29,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..llm.base import LLMBackend
 from ..memory.case import Case
-from ..types import MemoryDomain
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data models
@@ -59,8 +57,8 @@ class Skill:
     success_rate: float          # Success rate across source cases
     support: int                 # Number of source cases
     source_case_ids: list[str] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    last_updated: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_updated: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_prompt_block(self) -> str:
         """Render as a positive experience block for the planner."""
@@ -114,7 +112,7 @@ class SkillLibrary:
             # Merge support
             skill.support = old.support + skill.support
             skill.source_case_ids = list(set(old.source_case_ids + skill.source_case_ids))
-            skill.last_updated = datetime.utcnow().isoformat()
+            skill.last_updated = datetime.now(timezone.utc).isoformat()
         self.add(skill)
 
     def by_domain(self, domain: str, top_n: int = 3) -> list[Skill]:
@@ -153,7 +151,9 @@ class SkillLibrary:
         from pathlib import Path  # noqa: PLC0415
         p = Path(self._persist_path)  # type: ignore[arg-type]
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps([s.to_dict() for s in self._skills.values()], default=str))
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps([s.to_dict() for s in self._skills.values()], default=str))
+        tmp.replace(p)
 
     def _load(self, path: str) -> None:
         import json  # noqa: PLC0415
@@ -312,11 +312,12 @@ class SkillConsolidator:
             # Compute stats from source cases
             avg_steps = sum(len(c.trajectory.steps) for c in cases) / max(1, len(cases))
             avg_reward = sum(c.outcome.reward for c in cases) / max(1, len(cases))
-            success_rate = sum(1 for c in cases if c.outcome.status.value == "success") / max(1, len(cases))
+            n_success = sum(1 for c in cases if c.outcome.status.value == "success")
+            success_rate = n_success / max(1, len(cases))
 
             skills = []
             for item in data:
-                skill_id = hashlib.md5(
+                skill_id = hashlib.md5(  # fingerprint only, not cryptographic
                     (domain + item.get("name", "") + item.get("trigger", "")).encode()
                 ).hexdigest()[:12]
                 skills.append(Skill(

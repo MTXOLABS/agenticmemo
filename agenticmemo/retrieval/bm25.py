@@ -20,23 +20,31 @@ class BM25Index:
 
     def __init__(self) -> None:
         self._case_ids: list[str] = []
+        self._id_set: set[str] = set()
         self._corpus_tokens: list[list[str]] = []
         self._bm25 = None
         self._dirty = True
 
     def add(self, case: Case) -> None:
+        if case.id in self._id_set:
+            return
         tokens = _tokenize(case.task + " " + " ".join(case.keywords))
         self._case_ids.append(case.id)
+        self._id_set.add(case.id)
         self._corpus_tokens.append(tokens)
         self._dirty = True
 
     def remove(self, case_id: str) -> None:
-        if case_id not in self._case_ids:
+        if case_id not in self._id_set:
             return
         idx = self._case_ids.index(case_id)
         self._case_ids.pop(idx)
+        self._id_set.discard(case_id)
         self._corpus_tokens.pop(idx)
         self._dirty = True
+
+    def __contains__(self, case_id: str) -> bool:
+        return case_id in self._id_set
 
     def _build(self) -> None:
         if not self._dirty:

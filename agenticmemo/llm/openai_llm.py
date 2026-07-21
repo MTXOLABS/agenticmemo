@@ -5,17 +5,32 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..exceptions import LLMError
 from ..types import LLMResponse, Message, MessageRole, ToolCall
 from .base import LLMBackend
 
 
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry transient errors only — deterministic 4xx failures (bad request,
+    malformed tool call, auth) will fail identically on every attempt and
+    each retry still counts against provider rate limits."""
+    if isinstance(exc, LLMError):
+        msg = str(exc).lower()
+        non_retryable = (
+            "invalid_request", "tool_use_failed", "unauthorized",
+            "permission", "credit balance", "context_length",
+        )
+        if any(k in msg for k in non_retryable):
+            return False
+    return True
+
+
 class OpenAILLM(LLMBackend):
     """OpenAI (GPT) backend via the `openai` SDK.
 
-    Install extras: ``pip install agentmemento[openai]``
+    Install extras: ``pip install agenticmemo[openai]``
     """
 
     def __init__(
@@ -31,7 +46,7 @@ class OpenAILLM(LLMBackend):
             import openai  # noqa: PLC0415
         except ImportError as e:
             raise ImportError(
-                "openai SDK not installed. Run: pip install agentmemento[openai]"
+                "openai SDK not installed. Run: pip install agenticmemo[openai]"
             ) from e
         self._client = openai.AsyncOpenAI(
             api_key=api_key,
@@ -40,7 +55,12 @@ class OpenAILLM(LLMBackend):
             max_retries=0,  # we handle retries via tenacity
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(min=1, max=10),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
     async def complete(
         self,
         messages: list[Message],
@@ -124,7 +144,7 @@ class OpenAILLM(LLMBackend):
         except openai.OpenAIError as e:
             raise LLMError(f"OpenAI API error: {e}") from e
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     async def embed(self, texts: list[str]) -> list[list[float]]:
         try:
             import openai  # noqa: PLC0415

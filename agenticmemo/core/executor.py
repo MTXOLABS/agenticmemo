@@ -19,11 +19,12 @@ AgenticMemo v2 — Dynamic Mid-Execution Retrieval (DMER):
 
 from __future__ import annotations
 
+import json
 import time
-import uuid
 from typing import TYPE_CHECKING
 
 from ..config import AgentConfig
+from ..exceptions import LLMError
 from ..llm.base import LLMBackend
 from ..tools.registry import ToolRegistry
 from ..types import (
@@ -31,8 +32,8 @@ from ..types import (
     MessageRole,
     Step,
     TaskStatus,
-    Trajectory,
     ToolResult,
+    Trajectory,
 )
 
 if TYPE_CHECKING:
@@ -48,10 +49,32 @@ PLAN TO FOLLOW:
 Rules:
 - Follow the plan unless you discover a better approach.
 - Call one tool per step; observe the result before proceeding.
+- Keep each tool call small: short code blocks (under ~40 lines); split long
+  computations across multiple steps. Large single calls often fail to parse.
 - When you have enough information, provide a final answer WITHOUT calling any tool.
 - Be concise in your reasoning.
 - If a tool returns an error, try an alternative approach.
 """
+
+_MALFORMED_CALL_MSG = """\
+Your previous response could not be processed (the tool call failed to parse as \
+valid JSON — this usually happens with very long code arguments). Try again: \
+call ONE tool with a SHORTER argument (code under 40 lines), or give your final \
+answer as plain text with no tool call."""
+
+_GUIDE_TEMPLATE = (
+    "[REFERENCE TRAJECTORY] In the solved similar task, "
+    "the next action here was: {action}"
+)
+
+_ERROR_STREAK_MSG = """\
+[COURSE CORRECTION] Two consecutive tool calls errored. Change your approach: \
+simplify the code, split it into smaller pieces, and print intermediate values \
+so you can see where it breaks."""
+
+_REPEATED_CALL_MSG = """\
+[COURSE CORRECTION] You repeated the exact same tool call. Repeating it will \
+produce the same result — change the code or the approach."""
 
 _MEMORY_REFRESH_TEMPLATE = """\
 [MEMORY REFRESH at step {step}]
@@ -77,7 +100,7 @@ class Executor:
         llm: LLMBackend,
         tools: ToolRegistry,
         cfg: AgentConfig | None = None,
-        retriever: "EnsembleRetriever | None" = None,
+        retriever: EnsembleRetriever | None = None,
         memory_refresh_every: int = 3,
         memory_refresh_top_k: int = 2,
     ) -> None:
@@ -93,13 +116,17 @@ class Executor:
         task: str,
         plan: str,
         system_prefix: str | None = None,
+        exemplar_steps: list[str] | None = None,
     ) -> Trajectory:
         """Run the execution loop and return a Trajectory.
 
         Args:
-            task:          The original task string.
-            plan:          Plan text from the Planner.
-            system_prefix: Optional extra system context (e.g. reflexion).
+            task:           The original task string.
+            plan:           Plan text from the Planner.
+            system_prefix:  Optional extra system context (e.g. reflexion).
+            exemplar_steps: One-line actions from a solved similar trajectory;
+                            injected one per turn as a sequential scaffold
+                            (Phase 3.2 — combats mid-trajectory drift).
         """
         system = _EXEC_SYSTEM.format(plan=plan)
         if system_prefix:
@@ -120,8 +147,18 @@ class Executor:
 
         start_time = time.time()
         total_tokens = 0
+        llm_error_strikes = 0
+        tool_error_streak = 0
+        last_call_sig: tuple[str, str] | None = None
 
         for step_idx in range(self._cfg.max_steps):
+            # Phase 3.2: sequential scaffold — show only the NEXT reference
+            # action, so small models keep the thread without prompt bloat.
+            if exemplar_steps and step_idx < len(exemplar_steps):
+                messages.append(Message(
+                    role=MessageRole.USER,
+                    content=_GUIDE_TEMPLATE.format(action=exemplar_steps[step_idx]),
+                ))
             # DMER: inject memory refresh every N steps (not on step 0 — planner
             # already retrieved cases). This gives mid-task memory guidance.
             if (
@@ -138,18 +175,41 @@ class Executor:
                         content=memory_hint,
                     ))
 
-            resp = await self._llm.complete(
-                messages=messages,
-                tools=fmt_tools,
-                system=system,
-            )
+            # Fail-soft on provider errors (e.g. Groq `tool_use_failed` when a
+            # model emits malformed tool-call JSON): nudge the model to retry
+            # with a smaller call instead of killing the whole task. Two
+            # consecutive provider errors end the task as FAILURE.
+            try:
+                resp = await self._llm.complete(
+                    messages=messages,
+                    tools=fmt_tools,
+                    system=system,
+                )
+                llm_error_strikes = 0
+            except LLMError as e:
+                llm_error_strikes += 1
+                if llm_error_strikes >= 2:
+                    trajectory.status = TaskStatus.FAILURE
+                    trajectory.final_answer = ""
+                    trajectory.add_step(Step(
+                        index=step_idx,
+                        thought="[LLM provider error]",
+                        observation=str(e)[:300],
+                    ))
+                    break
+                messages.append(Message(
+                    role=MessageRole.USER,
+                    content=_MALFORMED_CALL_MSG,
+                ))
+                continue
             total_tokens += resp.input_tokens + resp.output_tokens
 
             if not resp.has_tool_calls:
-                # Final answer
+                # Final answer. SUCCESS here is tentative — the Agent runs an
+                # OutcomeVerifier pass afterwards to confirm or downgrade it.
                 trajectory.final_answer = resp.content
                 trajectory.status = (
-                    TaskStatus.SUCCESS if resp.content.strip() else TaskStatus.PARTIAL
+                    TaskStatus.SUCCESS if resp.content.strip() else TaskStatus.FAILURE
                 )
                 step = Step(
                     index=step_idx,
@@ -187,8 +247,21 @@ class Executor:
                 tool_name=tool_call.name,
             ))
 
+            # Phase 3.3: mid-trajectory sanity checks — nudge early instead
+            # of discovering a doomed trajectory only at the end.
+            sig = (tool_call.name, json.dumps(tool_call.arguments, sort_keys=True, default=str))
+            if tool_result.error:
+                tool_error_streak += 1
+            else:
+                tool_error_streak = 0
+            if tool_error_streak == 2:
+                messages.append(Message(role=MessageRole.USER, content=_ERROR_STREAK_MSG))
+            elif sig == last_call_sig:
+                messages.append(Message(role=MessageRole.USER, content=_REPEATED_CALL_MSG))
+            last_call_sig = sig
+
         else:
-            trajectory.status = TaskStatus.PARTIAL
+            trajectory.status = TaskStatus.FAILURE
             trajectory.final_answer = "Max steps reached without final answer."
 
         trajectory.total_tokens = total_tokens

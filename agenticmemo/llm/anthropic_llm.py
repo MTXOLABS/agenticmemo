@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -15,7 +14,7 @@ from .base import LLMBackend
 class AnthropicLLM(LLMBackend):
     """Claude backend via the `anthropic` SDK.
 
-    Install extras: ``pip install agentmemento[anthropic]``
+    Install extras: ``pip install agenticmemo[anthropic]``
     """
 
     def __init__(
@@ -30,7 +29,7 @@ class AnthropicLLM(LLMBackend):
             import anthropic  # noqa: PLC0415
         except ImportError as e:
             raise ImportError(
-                "anthropic SDK not installed. Run: pip install agentmemento[anthropic]"
+                "anthropic SDK not installed. Run: pip install agenticmemo[anthropic]"
             ) from e
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
@@ -41,7 +40,8 @@ class AnthropicLLM(LLMBackend):
         if isinstance(exc, LLMError):
             msg = str(exc).lower()
             # Never retry credit / auth / invalid-request errors
-            if any(k in msg for k in ("credit balance", "unauthorized", "invalid_request", "permission")):
+            non_retryable = ("credit balance", "unauthorized", "invalid_request", "permission")
+            if any(k in msg for k in non_retryable):
                 return False
         return True
 
@@ -49,6 +49,7 @@ class AnthropicLLM(LLMBackend):
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=10),
         retry=retry_if_exception(lambda e: AnthropicLLM._is_retryable(e)),
+        reraise=True,
     )
     async def complete(
         self,

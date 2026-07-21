@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Iterator
+from collections.abc import Iterator
 
 from ..config import MemoryConfig
 from ..types import MemoryDomain
 from .base import MemoryBackend
 from .case import Case
 from .graph_memory import TemporalGraphMemory
-
 
 # ---------------------------------------------------------------------------
 # Domain auto-classifier (keyword-based, zero-cost)
@@ -126,6 +125,8 @@ class HierarchicalMemory(MemoryBackend):
             persist_path=cfg.persist_path,
         )
         self._auto_classify = cfg.domain_auto_classify
+        self._dedup = cfg.dedup_on_store
+        self._fingerprints: set[str] = set()
 
         # Layer indices
         # domain  →  category  →  trace_id  →  [case_ids]
@@ -138,6 +139,13 @@ class HierarchicalMemory(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     async def store(self, case: Case) -> None:
+        # Dedup (Phase 4.1): identical experiences add retrieval noise
+        if self._dedup:
+            fp = self._fingerprint(case)
+            if fp in self._fingerprints:
+                return
+            self._fingerprints.add(fp)
+
         # Auto-classify if needed
         if self._auto_classify and case.domain == MemoryDomain.GENERAL:
             case.domain = classify_domain(case.task)
@@ -204,3 +212,9 @@ class HierarchicalMemory(MemoryBackend):
     @property
     def graph(self) -> TemporalGraphMemory:
         return self._graph
+
+    @staticmethod
+    def _fingerprint(case: Case) -> str:
+        import hashlib  # noqa: PLC0415
+        text = " ".join((case.task.lower().strip() + case.outcome.answer.lower().strip()).split())
+        return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()

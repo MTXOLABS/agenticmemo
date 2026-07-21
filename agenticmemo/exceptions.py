@@ -1,23 +1,23 @@
-"""AgentMemento custom exceptions."""
+"""AgenticMemo custom exceptions."""
 
 
-class AgentMementoError(Exception):
-    """Base exception for all AgentMemento errors."""
+class AgenticMemoError(Exception):
+    """Base exception for all AgenticMemo errors."""
 
 
-class LLMError(AgentMementoError):
+class LLMError(AgenticMemoError):
     """Raised when an LLM call fails."""
 
 
-class MemoryError(AgentMementoError):
+class MemoryError(AgenticMemoError):
     """Raised when a memory operation fails."""
 
 
-class RetrievalError(AgentMementoError):
+class RetrievalError(AgenticMemoError):
     """Raised when case retrieval fails."""
 
 
-class ToolError(AgentMementoError):
+class ToolError(AgenticMemoError):
     """Raised when a tool execution fails."""
 
     def __init__(self, tool_name: str, message: str) -> None:
@@ -25,25 +25,29 @@ class ToolError(AgentMementoError):
         super().__init__(f"Tool '{tool_name}' failed: {message}")
 
 
-class PlannerError(AgentMementoError):
+class PlannerError(AgenticMemoError):
     """Raised when planning fails."""
 
 
-class ExecutorError(AgentMementoError):
+class ExecutorError(AgenticMemoError):
     """Raised when execution fails."""
 
 
-class FilterError(AgentMementoError):
+class FilterError(AgenticMemoError):
     """Raised when trajectory filtering fails."""
 
 
-class EmbeddingError(AgentMementoError):
+class EmbeddingError(AgenticMemoError):
     """Raised when embedding computation fails."""
 
 
-class PolicyError(AgentMementoError):
+class PolicyError(AgenticMemoError):
     """Raised when policy update fails."""
 
 
-class ConfigError(AgentMementoError):
+class ConfigError(AgenticMemoError):
     """Raised on invalid configuration."""
+
+
+# Backward-compat alias for the pre-rebrand name
+AgentMementoError = AgenticMemoError

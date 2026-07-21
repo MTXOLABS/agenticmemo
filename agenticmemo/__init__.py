@@ -1,4 +1,4 @@
-"""AgentMemento — Advanced agentic learning without LLM fine-tuning.
+"""AgenticMemo — Advanced agentic learning without LLM fine-tuning.
 
 Key innovations over original Memento:
   - Temporal Knowledge Graph memory (vs flat Case Bank)
@@ -11,7 +11,7 @@ Key innovations over original Memento:
 Quick start::
 
     import asyncio
-    from agentmemento import Agent
+    from agenticmemo import Agent
     from agenticmemo.tools import PythonReplTool
 
     async def main():
@@ -23,36 +23,45 @@ Quick start::
     asyncio.run(main())
 """
 
-from .version import __version__, __author__, __license__
-from .config import AgentConfig, MemoryConfig, RetrievalConfig, LearningConfig
-from .types import (
-    Message,
-    MessageRole,
-    ToolCall,
-    ToolResult,
-    Step,
-    Trajectory,
-    LLMResponse,
-    TaskStatus,
-    MemoryDomain,
-)
+from .config import AgentConfig, LearningConfig, MemoryConfig, RetrievalConfig
+from .core import Agent, Executor, Planner
 from .exceptions import (
-    AgentMementoError,
+    AgenticMemoError,
     LLMError,
-    ToolError,
     RetrievalError,
+    ToolError,
 )
-from .llm import LLMBackend, AnthropicLLM, OpenAILLM
+from .learning import GRPOPolicy, OutcomeVerifier, ReflexionEngine, TrajectoryFilter
+from .llm import AnthropicLLM, LLMBackend, OpenAILLM
 from .memory import Case, CaseOutcome, HierarchicalMemory, TemporalGraphMemory
 from .retrieval import EnsembleRetriever, SentenceTransformerEmbeddings
-from .learning import TrajectoryFilter, ReflexionEngine, GRPOPolicy
-from .tools import Tool, tool, ToolRegistry
-from .tools import WebSearchTool, PythonReplTool, FileReadTool, FileWriteTool
-from .core import Agent, Planner, Executor
+from .tools import (
+    FileReadTool,
+    FileWriteTool,
+    PythonReplTool,
+    Tool,
+    ToolRegistry,
+    WebSearchTool,
+    tool,
+)
+from .types import (
+    LLMResponse,
+    MemoryDomain,
+    Message,
+    MessageRole,
+    Step,
+    TaskStatus,
+    ToolCall,
+    ToolResult,
+    Trajectory,
+)
+from .version import __author__, __license__, __version__
 
 __all__ = [
     # Version
     "__version__",
+    "__author__",
+    "__license__",
     # Config
     "AgentConfig",
     "MemoryConfig",
@@ -69,7 +78,7 @@ __all__ = [
     "TaskStatus",
     "MemoryDomain",
     # Exceptions
-    "AgentMementoError",
+    "AgenticMemoError",
     "LLMError",
     "ToolError",
     "RetrievalError",
@@ -89,6 +98,7 @@ __all__ = [
     "TrajectoryFilter",
     "ReflexionEngine",
     "GRPOPolicy",
+    "OutcomeVerifier",
     # Tools
     "Tool",
     "tool",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..exceptions import ToolError
 from ..types import ToolCall, ToolResult
 from .base import Tool
 
@@ -22,12 +21,12 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
 
-    def register(self, tool: Tool) -> "ToolRegistry":
+    def register(self, tool: Tool) -> ToolRegistry:
         """Register a tool. Returns self for chaining."""
         self._tools[tool.name] = tool
         return self
 
-    def register_many(self, *tools: Tool) -> "ToolRegistry":
+    def register_many(self, *tools: Tool) -> ToolRegistry:
         for t in tools:
             self.register(t)
         return self

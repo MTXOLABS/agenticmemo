@@ -17,13 +17,10 @@ Stage 3 — Reward variance filter
 from __future__ import annotations
 
 import statistics
-from typing import Any
 
 from ..config import LearningConfig
-from ..exceptions import FilterError
 from ..llm.base import LLMBackend
 from ..types import Message, MessageRole, TaskStatus, Trajectory
-
 
 _SELF_EVAL_PROMPT = """\
 You are a quality evaluator for AI agent trajectories.
@@ -58,19 +55,35 @@ class TrajectoryFilter:
         self._llm = llm
         self._cfg = cfg or LearningConfig()
 
-    async def filter_single(self, task: str, trajectory: Trajectory) -> bool:
-        """Return True if trajectory passes all filters."""
+    async def filter_single(
+        self, task: str, trajectory: Trajectory, verified: bool = False
+    ) -> bool:
+        """Return True if trajectory passes all filters.
+
+        Args:
+            verified: True when an OutcomeVerifier already judged this
+                trajectory SUCCESS. The verifier's judgment subsumes the
+                stage-2 self-eval — running both is one redundant LLM call
+                per successful task (measured overhead, Phase 1.1).
+        """
         if not self._cfg.enable_quality_filter:
             return True
         # Stage 1: structural
         if not self._structural_check(trajectory):
             return False
-        # Stage 2: self-purification (only if LLM available)
-        if self._llm is not None:
+        # Stage 2: self-purification (skip when already verified)
+        if self._llm is not None and not verified:
             score = await self._self_eval_score(task, trajectory)
             if score < 0.4:
                 return False
         return True
+
+    def structural_ok(self, trajectory: Trajectory) -> bool:
+        """Stage 1 only — used for failed trajectories, which are stored as
+        anti-cases for CFM and would never pass the LLM quality stage."""
+        if not self._cfg.enable_quality_filter:
+            return True
+        return self._structural_check(trajectory)
 
     async def filter_batch(
         self, items: list[tuple[str, Trajectory]]
@@ -89,10 +102,16 @@ class TrajectoryFilter:
         return self._variance_filter(passed)
 
     def assign_reward(self, trajectory: Trajectory) -> float:
-        """Map trajectory status to a scalar reward."""
+        """Map trajectory status to a scalar reward.
+
+        With `step_penalty` enabled, efficient successes score higher than
+        long-winded ones — the GRPO policy then favors retrieving the cases
+        that historically solved tasks in fewer steps.
+        """
         cfg = self._cfg
         if trajectory.status == TaskStatus.SUCCESS:
-            return cfg.success_reward
+            reward = cfg.success_reward - cfg.step_penalty * trajectory.num_steps
+            return max(cfg.success_reward / 2, reward)
         elif trajectory.status == TaskStatus.PARTIAL:
             return cfg.partial_reward
         else:

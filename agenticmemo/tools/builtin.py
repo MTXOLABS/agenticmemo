@@ -1,18 +1,17 @@
-"""Built-in tools bundled with AgentMemento."""
+"""Built-in tools bundled with AgenticMemo."""
 
 from __future__ import annotations
 
-import ast
+import asyncio
 import io
-import sys
 import time
 import traceback
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from .base import Tool
 from ..types import ToolResult
+from .base import Tool
 
 
 class WebSearchTool(Tool):
@@ -24,7 +23,9 @@ class WebSearchTool(Tool):
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "max_results": {"type": "integer", "description": "Max results to return", "default": 5},
+            "max_results": {
+                "type": "integer", "description": "Max results to return", "default": 5,
+            },
         },
         "required": ["query"],
     }
@@ -34,14 +35,20 @@ class WebSearchTool(Tool):
         call_id = str(uuid.uuid4())
         try:
             from duckduckgo_search import DDGS  # noqa: PLC0415
-            results = []
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=max_results):
-                    results.append({
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", ""),
-                    })
+
+            def _search() -> list[dict[str, str]]:
+                found = []
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=max_results):
+                        found.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("href", ""),
+                            "snippet": r.get("body", ""),
+                        })
+                return found
+
+            # DDGS is synchronous — run in a thread so it doesn't block the loop
+            results = await asyncio.to_thread(_search)
             return ToolResult(tool_call_id=call_id, tool_name=self.name, output=results)
         except ImportError:
             return ToolResult(
@@ -53,7 +60,11 @@ class WebSearchTool(Tool):
 
 
 class PythonReplTool(Tool):
-    """Execute Python code in an isolated namespace and return stdout/result."""
+    """Execute Python code in a namespace that persists across calls.
+
+    WARNING: runs arbitrary code via exec() in the current process with no
+    sandboxing. Only use with trusted models/inputs, or wrap in a container.
+    """
 
     name = "python_repl"
     description = "Execute Python code and return the output."

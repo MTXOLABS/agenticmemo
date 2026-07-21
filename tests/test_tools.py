@@ -2,11 +2,10 @@
 
 import pytest
 
-from agenticmemo.tools.base import Tool, tool
+from agenticmemo.tools.base import tool
+from agenticmemo.tools.builtin import FileReadTool, FileWriteTool, PythonReplTool
 from agenticmemo.tools.registry import ToolRegistry
-from agenticmemo.tools.builtin import PythonReplTool, FileReadTool, FileWriteTool
 from agenticmemo.types import ToolCall
-
 
 # ---------------------------------------------------------------------------
 # @tool decorator

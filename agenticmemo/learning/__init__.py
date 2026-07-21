@@ -1,6 +1,15 @@
 from .filters import TrajectoryFilter
-from .reflexion import ReflexionEngine
 from .grpo import GRPOPolicy
-from .hints import HintExtractor, HintLibrary, Hint
+from .hints import Hint, HintExtractor, HintLibrary
+from .reflexion import ReflexionEngine
+from .verifier import OutcomeVerifier
 
-__all__ = ["TrajectoryFilter", "ReflexionEngine", "GRPOPolicy", "HintExtractor", "HintLibrary", "Hint"]
+__all__ = [
+    "TrajectoryFilter",
+    "ReflexionEngine",
+    "GRPOPolicy",
+    "HintExtractor",
+    "HintLibrary",
+    "Hint",
+    "OutcomeVerifier",
+]

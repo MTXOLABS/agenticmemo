@@ -21,12 +21,8 @@ Reference: Intrinsic Memory Agents (arXiv 2508.08997)
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 
-import numpy as np
-
-from ..config import MemoryConfig, RetrievalConfig
-from ..types import MemoryDomain
+from ..config import MemoryConfig
 from .case import Case
 from .hierarchical import HierarchicalMemory
 
@@ -69,7 +65,7 @@ class SharedMemoryPool:
 
     def register_agent(
         self, agent_id: str, cfg: MemoryConfig | None = None
-    ) -> "SharedMemoryPool":
+    ) -> SharedMemoryPool:
         """Register a new agent with its own private memory."""
         if agent_id not in self._agent_memories:
             self._agent_memories[agent_id] = HierarchicalMemory(cfg or MemoryConfig())
@@ -180,4 +176,4 @@ class SharedMemoryPool:
         text = (case.task.lower().strip() + case.outcome.answer.lower().strip())
         # Remove whitespace variations
         text = " ".join(text.split())
-        return hashlib.md5(text.encode()).hexdigest()  # noqa: S324
+        return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()

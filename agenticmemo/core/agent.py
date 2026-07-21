@@ -33,7 +33,6 @@ AgenticMemo v2 Innovations:
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from rich.console import Console
@@ -46,18 +45,20 @@ from ..learning.grpo import GRPOPolicy
 from ..learning.hints import HintExtractor, HintLibrary
 from ..learning.reflexion import ReflexionEngine
 from ..learning.skill_consolidator import SkillConsolidator, SkillLibrary
-from ..llm.base import LLMBackend
+from ..learning.verifier import OutcomeVerifier
+from ..llm.accounting import TaggedLLM, TokenLedger
 from ..llm.anthropic_llm import AnthropicLLM
+from ..llm.base import LLMBackend
+from ..llm.compat import apply_tool_quirks, warn_if_output_budget_low
 from ..llm.openai_llm import OpenAILLM
-from ..memory.case import Case, CaseOutcome
+from ..memory.case import Case, CaseOutcome, extract_solution
 from ..memory.hierarchical import HierarchicalMemory
 from ..retrieval.ensemble import EnsembleRetriever
-from ..tools.registry import ToolRegistry
 from ..tools.base import Tool
+from ..tools.registry import ToolRegistry
 from ..types import MemoryDomain, TaskStatus, Trajectory
 from .executor import Executor
 from .planner import Planner
-
 
 _console = Console()
 
@@ -92,46 +93,71 @@ class Agent:
         self,
         llm: LLMBackend,
         cfg: AgentConfig | None = None,
+        judge_llm: LLMBackend | None = None,
     ) -> None:
+        """Args:
+            llm:       Primary backend for planning and execution.
+            cfg:       Agent configuration.
+            judge_llm: Optional cheaper backend for verification/filtering —
+                       judging an answer is much easier than producing it, so
+                       a nano-class judge cuts overhead without losing signal.
+        """
         self._llm = llm
         self._cfg = cfg or AgentConfig()
+        warn_if_output_budget_low(llm)
+
+        # Per-subsystem token accounting: every component gets a tagged LLM
+        # handle so each run's cost decomposes by purpose (Phase 0).
+        self._ledger = TokenLedger()
+
+        def tag(purpose: str, backend: LLMBackend = llm) -> TaggedLLM:
+            return TaggedLLM(backend, purpose, self._ledger)
+
+        judge = judge_llm or llm
 
         # Memory
         self._memory = HierarchicalMemory(self._cfg.memory)
 
-        # Retrieval
-        self._retriever = EnsembleRetriever(self._memory, self._cfg.retrieval)
+        # Learning — Phases 1-3
+        self._filter = TrajectoryFilter(tag("filter", judge), self._cfg.learning)
+        self._verifier = OutcomeVerifier(tag("verifier", judge), self._cfg.learning)
+        self._reflexion = ReflexionEngine(tag("reflexion"), self._cfg.learning)
+        self._grpo = GRPOPolicy(self._cfg.retrieval)
+
+        # Retrieval — GRPO policy is passed in so its learned Q-values
+        # actually rerank retrieval results (planning + DMER).
+        self._retriever = EnsembleRetriever(
+            self._memory, self._cfg.retrieval, grpo_policy=self._grpo
+        )
 
         # Tools
         self._tools = ToolRegistry()
 
-        # Learning — Phases 1-3
-        self._filter = TrajectoryFilter(llm, self._cfg.learning)
-        self._reflexion = ReflexionEngine(llm, self._cfg.learning)
-        self._grpo = GRPOPolicy(self._cfg.retrieval)
-
-        # Learning — Phase 4: hints internalization
-        self._hint_library = HintLibrary()
-        self._hint_extractor = HintExtractor(llm, self._hint_library)
-        self._cases_since_hint_extract: int = 0
-
-        # v2: Causal Failure Mining (CFM) — persists alongside main memory
+        # Persistence paths for the auxiliary learning stores
         _base = self._cfg.memory.persist_path
         _failure_path = (_base.replace(".json", "_failures.json") if _base else None)
         _skills_path  = (_base.replace(".json", "_skills.json")   if _base else None)
+        _hints_path   = (_base.replace(".json", "_hints.json")    if _base else None)
 
+        # Learning — Phase 4: hints internalization
+        self._hint_library = HintLibrary(persist_path=_hints_path)
+        self._hint_library.load()
+        self._hint_extractor = HintExtractor(tag("hints"), self._hint_library)
+        self._cases_since_hint_extract: int = 0
+
+        # v2: Causal Failure Mining (CFM) — persists alongside main memory
         self._failure_bank = FailurePatternBank(persist_path=_failure_path)
-        self._failure_miner = FailureMiner(llm, self._failure_bank)
+        self._failure_miner = FailureMiner(tag("mining"), self._failure_bank)
 
         # v2: Episodic-to-Semantic Memory Consolidation (ESMC)
         self._skill_library = SkillLibrary(persist_path=_skills_path)
-        self._skill_consolidator = SkillConsolidator(llm, self._skill_library)
+        self._skill_consolidator = SkillConsolidator(tag("consolidation"), self._skill_library)
 
         # Core components
         # v2: pass retriever to executor for DMER (Dynamic Mid-Execution Retrieval)
-        self._planner = Planner(llm, self._retriever, self._cfg)
+        self._planner = Planner(tag("planner"), self._retriever, self._cfg)
         self._executor = Executor(
-            llm, self._tools, self._cfg,
+            tag("executor"), self._tools, self._cfg,
             retriever=self._retriever,       # DMER enabled
             memory_refresh_every=3,
             memory_refresh_top_k=2,
@@ -147,10 +173,14 @@ class Agent:
         api_key: str | None = None,
         model: str = "claude-sonnet-4-6",
         cfg: AgentConfig | None = None,
+        judge_model: str | None = None,
         **llm_kwargs: Any,
-    ) -> "Agent":
+    ) -> Agent:
         llm = AnthropicLLM(model=model, api_key=api_key, **llm_kwargs)
-        return cls(llm, cfg)
+        judge = (
+            AnthropicLLM(model=judge_model, api_key=api_key) if judge_model else None
+        )
+        return cls(llm, cfg, judge_llm=judge)
 
     @classmethod
     def from_openai(
@@ -158,21 +188,24 @@ class Agent:
         api_key: str | None = None,
         model: str = "gpt-4o",
         cfg: AgentConfig | None = None,
+        judge_model: str | None = None,
         **llm_kwargs: Any,
-    ) -> "Agent":
+    ) -> Agent:
         llm = OpenAILLM(model=model, api_key=api_key, **llm_kwargs)
-        return cls(llm, cfg)
+        judge = OpenAILLM(model=judge_model, api_key=api_key) if judge_model else None
+        return cls(llm, cfg, judge_llm=judge)
 
     # ------------------------------------------------------------------ #
     # Tool management
     # ------------------------------------------------------------------ #
 
-    def add_tool(self, tool: Tool) -> "Agent":
-        self._tools.register(tool)
+    def add_tool(self, tool: Tool) -> Agent:
+        self._tools.register(apply_tool_quirks(tool, self._llm.model))
         return self
 
-    def add_tools(self, *tools: Tool) -> "Agent":
-        self._tools.register_many(*tools)
+    def add_tools(self, *tools: Tool) -> Agent:
+        for t in tools:
+            self.add_tool(t)
         return self
 
     # ------------------------------------------------------------------ #
@@ -198,6 +231,7 @@ class Agent:
         if self._cfg.verbose:
             _console.print(Panel(f"[bold cyan]Task:[/] {task}", title="AgenticMemo"))
 
+        ledger_before = self._ledger.snapshot()
         reflection: str | None = None
         trajectory: Trajectory | None = None
 
@@ -227,15 +261,70 @@ class Agent:
                 hints=hints_block or None,
                 failure_patterns=failure_patterns_block or None,
                 skills=skills_block or None,
+                domain=domain,
             )
             if self._cfg.verbose:
                 _console.print(f"[dim]Plan:\n{plan[:400]}...[/]")
 
-            # 3. Execute
-            sys_prefix = (
-                self._reflexion.build_retry_system(reflection) if reflection else None
+            # 3. Execute — with the best proven solution as an execution-time
+            # exemplar. The planner summarizes memory, but a weaker model
+            # benefits most from seeing working code WHILE executing: adapting
+            # a proven artifact takes far fewer steps than re-deriving it.
+            prefix_parts: list[str] = []
+            exemplar = next(
+                (c for c in retrieved_cases if c.is_success and c.solution), None
             )
-            trajectory = await self._executor.execute(task, plan, system_prefix=sys_prefix)
+            if exemplar is not None:
+                # Template solutions (with an INPUTS block) turn adaptation
+                # into a trivial edit — the easiest possible reuse for a
+                # small model. Blob solutions fall back to free adaptation.
+                if "# --- INPUTS ---" in exemplar.solution:
+                    how = (
+                        "Edit ONLY the `# --- INPUTS ---` block to match the "
+                        "CURRENT task's numbers, keep the logic unchanged, "
+                        "then EXECUTE it with your tools."
+                    )
+                else:
+                    how = (
+                        "Adapt this code to the CURRENT task's inputs and "
+                        "EXECUTE it with your tools."
+                    )
+                prefix_parts.append(
+                    "REFERENCE SOLUTION from a previously solved similar task "
+                    f"(task: {exemplar.task[:150]}).\n{how} "
+                    "Never copy its printed results as your answer — the "
+                    "reference used different inputs; only your own execution "
+                    "output counts:\n"
+                    f"{exemplar.solution[:2000]}"
+                )
+            if reflection:
+                prefix_parts.append(self._reflexion.build_retry_system(reflection))
+            sys_prefix = "\n\n".join(prefix_parts) or None
+
+            # Phase 3.2 — stepwise guidance: one-line "next action" scaffold
+            # per turn from the exemplar's successful trajectory. Only for
+            # genuinely multi-step exemplars: a 1-step pack case would emit
+            # "→ final answer" as the FIRST hint, teaching the model to stop
+            # before reporting its deliverables (measured: 2-step partials).
+            exemplar_steps: list[str] | None = None
+            if (
+                exemplar is not None
+                and self._cfg.enable_stepwise_guidance
+                and len(exemplar.trajectory.steps) >= 3
+            ):
+                exemplar_steps = [
+                    f"{s.thought[:100]}"
+                    + (f" → {s.tool_call.name}" if s.tool_call else " → final answer")
+                    for s in exemplar.trajectory.steps[:12]
+                ]
+
+            trajectory = await self._executor.execute(
+                task, plan, system_prefix=sys_prefix, exemplar_steps=exemplar_steps
+            )
+
+            # 3.5 Verify outcome — the executor's SUCCESS only means "produced
+            # a final answer"; the verifier judges whether it solves the task.
+            trajectory.status = await self._verifier.verify(task, trajectory)
 
             if self._cfg.verbose:
                 status_color = "green" if trajectory.status == TaskStatus.SUCCESS else "red"
@@ -260,11 +349,28 @@ class Agent:
         reward = self._filter.assign_reward(trajectory)
         trajectory.reward = reward
 
-        # Quality filter + store
-        passed = await self._filter.filter_single(task, trajectory)
+        # Quality filter + store. Successes must pass the full filter;
+        # failures/partials only need to be structurally sane — they are
+        # stored as anti-cases so the FailureMiner (CFM) can learn from them.
+        # A verifier SUCCESS verdict subsumes the filter's LLM self-eval
+        # (Phase 1.1 — one judgment per trajectory, not two).
+        if trajectory.status == TaskStatus.SUCCESS:
+            passed = await self._filter.filter_single(
+                task, trajectory,
+                verified=self._cfg.learning.enable_verification,
+            )
+        else:
+            passed = self._filter.structural_ok(trajectory)
         if passed and reward >= self._cfg.memory.min_reward_to_store:
-            await self._store_case(task, trajectory, retrieved_cases, domain)
+            # Lazy learning: ≤2-step runs carry no strategy worth mining —
+            # store the case but skip the periodic learning machinery.
+            await self._store_case(
+                task, trajectory, retrieved_cases, domain,
+                learn=trajectory.num_steps > 2,
+                plan=plan,
+            )
 
+        trajectory.metadata["token_breakdown"] = self._ledger.delta_since(ledger_before)
         return trajectory
 
     # ------------------------------------------------------------------ #
@@ -277,6 +383,8 @@ class Agent:
         trajectory: Trajectory,
         retrieved_cases: list[Case],
         domain: MemoryDomain | None,
+        learn: bool = True,
+        plan: str = "",
     ) -> None:
         outcome = CaseOutcome(
             status=trajectory.status,
@@ -289,6 +397,9 @@ class Agent:
             domain=domain or MemoryDomain.GENERAL,
             trajectory=trajectory,
             outcome=outcome,
+            solution=extract_solution(trajectory),
+            # Plans are only worth reusing when they actually worked
+            plan=plan if trajectory.status == TaskStatus.SUCCESS else "",
         )
 
         await self._memory.store(case)
@@ -308,6 +419,9 @@ class Agent:
         updated = self._grpo.update(case_map)
         if updated and self._cfg.verbose:
             _console.print(f"[dim]GRPO updated {updated} case Q-values[/]")
+
+        if not learn:
+            return  # trivial run: case stored + GRPO updated, no LLM learning
 
         # Phase 4: periodic hint extraction
         self._cases_since_hint_extract += 1
@@ -342,6 +456,94 @@ class Agent:
     async def memory_size(self) -> int:
         return await self._memory.size()
 
+    async def load_memory_pack(self, path: str) -> int:
+        """Pre-load expert-curated cases from a memory-pack JSON file.
+
+        A memory pack is a list of entries::
+
+            [{"task": "...", "domain": "finance",         # optional
+              "code": "<verified working code>",
+              "answer": "<its output>"}, ...]              # answer optional
+
+        Packs let a strong model or human expert "teach" weaker models:
+        solutions are stored as proven exemplars that retrieval surfaces on
+        similar tasks. Reference outputs are withheld from prompts by design —
+        models near their capability edge copy visible answers instead of
+        executing (measured on three model families).
+
+        Returns the number of cases loaded.
+        """
+        import json as _json  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from ..types import Step, ToolCall, ToolResult  # noqa: PLC0415
+
+        entries = _json.loads(_Path(path).read_text())
+        for i, e in enumerate(entries):
+            answer = e.get("answer", "")
+            traj = Trajectory(
+                task=e["task"], status=TaskStatus.SUCCESS, final_answer=answer
+            )
+            traj.add_step(Step(
+                index=0,
+                thought="Apply the verified reference implementation.",
+                tool_call=ToolCall(id=f"pack{i}", name="python_repl",
+                                   arguments={"code": e["code"]}),
+                tool_result=ToolResult(tool_call_id=f"pack{i}",
+                                       tool_name="python_repl", output=answer),
+                observation="[reference executed successfully — output withheld]",
+            ))
+            case = Case(
+                task=e["task"],
+                domain=MemoryDomain(e["domain"]) if e.get("domain") else MemoryDomain.GENERAL,
+                trajectory=traj,
+                outcome=CaseOutcome(status=TaskStatus.SUCCESS, reward=1.0,
+                                    answer=answer[:500]),
+                solution=f"# via python_repl\n{e['code']}",
+                plan=(
+                    "Step 1: Take the proven reference implementation and edit "
+                    "only its INPUTS to match this task.\n"
+                    "Step 2: Execute the adapted code with the python tool.\n"
+                    "Step 3: Check the task statement again — it lists MULTIPLE "
+                    "required deliverables. If any are missing from your output, "
+                    "extend the code and run again.\n"
+                    "Step 4: Report EVERY requested value from your own "
+                    "execution output. An answer missing deliverables is "
+                    "incomplete."
+                ),
+            )
+            await self._memory.store(case)
+            await self._retriever.index_case(case)
+        return len(entries)
+
+    async def export_memory_pack(self, path: str) -> int:
+        """Export solution-bearing successful cases as a memory-pack JSON.
+
+        The exported pack can be loaded by any other agent — including ones
+        running much smaller models. Returns the number of cases exported.
+        """
+        import json as _json  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        cases = await self._memory.all_cases()
+        entries = []
+        for c in cases:
+            if not (c.is_success and c.solution):
+                continue
+            code = c.solution.split("\n", 1)[1] if "\n" in c.solution else c.solution
+            entries.append({
+                "task": c.task,
+                "domain": c.domain.value,
+                "code": code,
+                "answer": c.outcome.answer,
+            })
+        p = _Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(_json.dumps(entries, indent=2))
+        tmp.replace(p)
+        return len(entries)
+
     async def clear_memory(self) -> None:
         await self._memory.clear()
         await self._retriever.rebuild_index()
@@ -358,6 +560,10 @@ class Agent:
 
     def grpo_stats(self) -> dict[str, float]:
         return self._grpo.stats()
+
+    def token_breakdown(self) -> dict[str, dict[str, int]]:
+        """Cumulative token/call counts per subsystem (planner, executor, ...)."""
+        return self._ledger.breakdown()
 
     def hint_library(self) -> HintLibrary:
         return self._hint_library

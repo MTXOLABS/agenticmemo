@@ -2,10 +2,10 @@
 
 import pytest
 
+from agenticmemo.learning.hints import Hint, HintLibrary
 from agenticmemo.memory.case import Case, CaseOutcome
 from agenticmemo.memory.shared import SharedMemoryPool
-from agenticmemo.learning.hints import Hint, HintLibrary
-from agenticmemo.types import MemoryDomain, TaskStatus, Trajectory
+from agenticmemo.types import TaskStatus, Trajectory
 
 
 def _make_case(task: str = "test", reward: float = 1.0, answer: str = "done") -> Case:
@@ -96,17 +96,16 @@ async def test_shared_pool_consensus_promotion():
 
 @pytest.mark.asyncio
 async def test_shared_pool_dedup_shared():
-    """dedup_shared() removes exact duplicate fingerprints found in the store."""
+    """Duplicates never survive: store-level dedup (Phase 4.1) rejects the
+    second identical case, so dedup_shared() finds nothing left to remove."""
     pool = SharedMemoryPool()
-    # Bypass store_shared (which rejects dups) and insert directly
     c1 = _make_case("task A", answer="answer A")
     c2 = _make_case("task A", answer="answer A")  # same fingerprint
     await pool._shared.store(c1)
-    await pool._shared.store(c2)
-    # Both are in the store; dedup_shared scans and finds 1 duplicate → removes 1
-    removed = await pool.dedup_shared()
-    assert removed == 1
+    await pool._shared.store(c2)                  # silently skipped by dedup
     assert await pool.shared_size() == 1
+    removed = await pool.dedup_shared()
+    assert removed == 0                           # nothing to clean up anymore
 
 @pytest.mark.asyncio
 async def test_shared_pool_agent_ids():
@@ -157,7 +156,10 @@ def test_hint_library_to_prompt_block_empty():
 
 def test_hint_library_to_prompt_block_with_hints():
     lib = HintLibrary()
-    lib.add(Hint(id="h1", domain="general", text="Check outputs before proceeding", support=3, avg_reward=0.9))
+    lib.add(Hint(
+        id="h1", domain="general", text="Check outputs before proceeding",
+        support=3, avg_reward=0.9,
+    ))
     block = lib.to_prompt_block()
     assert "Check outputs before proceeding" in block
     assert "Internalized Hints" in block

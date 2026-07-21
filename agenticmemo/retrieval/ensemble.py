@@ -12,6 +12,8 @@ This ensemble approach yields ~40% better retrieval precision than cosine-only.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from ..config import RetrievalConfig
@@ -20,6 +22,9 @@ from ..memory.hierarchical import HierarchicalMemory
 from ..types import MemoryDomain
 from .bm25 import BM25Index
 from .embeddings import EmbeddingBackend, SentenceTransformerEmbeddings
+
+if TYPE_CHECKING:
+    from ..learning.grpo import GRPOPolicy
 
 
 class EnsembleRetriever:
@@ -36,6 +41,7 @@ class EnsembleRetriever:
         memory: HierarchicalMemory,
         cfg: RetrievalConfig | None = None,
         embedder: EmbeddingBackend | None = None,
+        grpo_policy: GRPOPolicy | None = None,
     ) -> None:
         self._memory = memory
         self._cfg = cfg or RetrievalConfig()
@@ -43,7 +49,19 @@ class EnsembleRetriever:
             self._cfg.embedding_model
         )
         self._bm25 = BM25Index()
-        self._embed_cache: dict[str, np.ndarray] = {}  # case_id → vector
+        # LRU-capped embedding cache (Phase 4.5): unbounded growth was the
+        # slow memory leak in long sessions. OrderedDict as LRU.
+        from collections import OrderedDict  # noqa: PLC0415
+        self._embed_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._embed_cache_max = max(self._cfg.top_k * 4, 10_000)
+        self._grpo = grpo_policy  # optional learned rerank on top of ensemble scores
+
+    def _cache_put(self, case_id: str, vec: np.ndarray) -> None:
+        cache = self._embed_cache
+        cache[case_id] = vec
+        cache.move_to_end(case_id)
+        while len(cache) > self._embed_cache_max:
+            cache.popitem(last=False)
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -75,6 +93,12 @@ class EnsembleRetriever:
 
         if not candidates:
             return []
+
+        # Backfill BM25 for cases loaded from persistence: on restart the
+        # index starts empty (embeddings are backfilled in _semantic_scores).
+        for c in candidates:
+            if c.id not in self._bm25:
+                self._bm25.add(c)
 
         # 2. Semantic scores
         sem_scores = await self._semantic_scores(query, candidates)
@@ -111,13 +135,19 @@ class EnsembleRetriever:
                 scored.append((case, score))
 
         scored.sort(key=lambda x: x[1], reverse=True)
+
+        # GRPO rerank: apply learned per-case Q-value bonuses so outcomes
+        # recorded by the policy actually shift future retrieval.
+        if self._grpo is not None:
+            scored = self._grpo.rerank(scored)
+
         return scored[:top_k]
 
     async def index_case(self, case: Case) -> None:
         """Add a new case to all indices (call after storing in memory)."""
         # Embed and cache
         vecs = await self._embedder.encode([case.task])
-        self._embed_cache[case.id] = vecs[0]
+        self._cache_put(case.id, vecs[0])
         # BM25
         self._bm25.add(case)
 
@@ -132,7 +162,9 @@ class EnsembleRetriever:
         if not texts:
             return
         vecs = await self._embedder.encode(texts)
-        self._embed_cache = {c.id: vecs[i] for i, c in enumerate(cases)}
+        self._embed_cache.clear()
+        for i, c in enumerate(cases):
+            self._cache_put(c.id, vecs[i])
         self._bm25 = BM25Index()
         for c in cases:
             self._bm25.add(c)
@@ -152,7 +184,7 @@ class EnsembleRetriever:
         if missing:
             vecs = await self._embedder.encode([c.task for c in missing])
             for c, v in zip(missing, vecs):
-                self._embed_cache[c.id] = v
+                self._cache_put(c.id, v)
 
         corpus = np.stack([self._embed_cache[c.id] for c in candidates])
         return self._embedder.batch_cosine_similarity(q_vec, corpus)

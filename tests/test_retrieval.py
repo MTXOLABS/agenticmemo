@@ -1,14 +1,13 @@
 """Tests for retrieval system."""
 
 import pytest
-import numpy as np
 
+from agenticmemo.config import RetrievalConfig
 from agenticmemo.memory.case import Case, CaseOutcome
 from agenticmemo.memory.hierarchical import HierarchicalMemory
 from agenticmemo.retrieval.bm25 import BM25Index
 from agenticmemo.retrieval.embeddings import SentenceTransformerEmbeddings
 from agenticmemo.retrieval.ensemble import EnsembleRetriever
-from agenticmemo.config import RetrievalConfig
 from agenticmemo.types import TaskStatus, Trajectory
 
 

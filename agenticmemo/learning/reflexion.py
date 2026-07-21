@@ -18,7 +18,6 @@ from ..config import LearningConfig
 from ..llm.base import LLMBackend
 from ..types import Message, MessageRole, TaskStatus, Trajectory
 
-
 _REFLECT_PROMPT = """\
 You are an expert AI agent trainer reviewing a failed task execution.
 

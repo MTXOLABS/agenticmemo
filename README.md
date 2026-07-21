@@ -233,6 +233,8 @@ Compared to cosine-only retrieval, this ensemble approach yields ~40% better pre
 
 **Reflexion** handles task failures: the LLM diagnoses what went wrong, generates a concrete correction strategy, and stores the `(failure, reflection, fix)` triple in the case. Future retrievals surface both successful and corrective cases.
 
+**Outcome verification** grounds the success signal: after each execution attempt, an LLM-as-judge pass grades whether the final answer actually solves the task (`success` / `partial` / `failure`). Verified failures feed Reflexion retries, GRPO rewards, and the failure-pattern miner.
+
 #### Phase 3 — Temporal Knowledge Graph Memory
 Cases are stored in a NetworkX-based directed graph instead of a flat list:
 - **Nodes** — Case objects with temporal metadata and outcome scores
@@ -273,7 +275,7 @@ agent = Agent.from_anthropic(
             max_cases=50_000,              # hard cap on stored cases
             persist_path="./memory.json",  # disk persistence (None = in-memory)
             temporal_decay_rate=0.005,     # staleness decay per day
-            min_reward_to_store=0.0,       # discard cases below this reward
+            min_reward_to_store=-1.0,      # keep failures as anti-cases for CFM
         ),
 
         retrieval=RetrievalConfig(
@@ -296,6 +298,10 @@ agent = Agent.from_anthropic(
         ),
 
         learning=LearningConfig(
+            # Outcome verification (LLM-as-judge grades each attempt;
+            # without it any non-empty answer would count as success)
+            enable_verification=True,
+
             # Reflexion
             enable_reflexion=True,
             max_reflexion_retries=2,

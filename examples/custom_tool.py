@@ -9,8 +9,7 @@ import asyncio
 import os
 
 from agenticmemo import Agent
-from agenticmemo.tools import tool, PythonReplTool
-
+from agenticmemo.tools import PythonReplTool, tool
 
 # ---------------------------------------------------------------------------
 # Define a custom tool using the @tool decorator

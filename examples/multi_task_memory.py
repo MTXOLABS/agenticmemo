@@ -17,7 +17,6 @@ import time
 from agenticmemo import Agent, AgentConfig, MemoryConfig, RetrievalConfig
 from agenticmemo.tools import PythonReplTool
 
-
 TASKS = [
     # Round 1: warm up
     "Write a Python function to reverse a string.",

@@ -40,13 +40,17 @@ memory_store/
 case_bank/
 
 # Benchmark results (raw data — not committed)
-benchmark_report.json
-hard_results.json
-paper_results.json
+benchmarks/results/
 
 # Build artifacts
-paper_submission.zip
 dist/
 
 # Paper (keep local)
 paper/
+
+# Internal business docs (keep local)
+docs/launch/
+
+# Claude Code: ignore session state but keep project skills tracked
+.claude/*
+!.claude/skills/

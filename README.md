@@ -1,15 +1,15 @@
 <div align="center">
 
-<h1>AgenticMemo</h1>
+<h1>Escape</h1>
 
-<p><strong>LLM agents that learn from experience — no fine-tuning required.</strong></p>
+<p><strong>Reference knowledge and validated experience for your agents.</strong></p>
 
 <p>
   <a href="https://pypi.org/project/agenticmemo"><img src="https://img.shields.io/pypi/v/agenticmemo?color=blue&style=flat-square" alt="PyPI"></a>
   <a href="https://pypi.org/project/agenticmemo"><img src="https://img.shields.io/pypi/pyversions/agenticmemo?style=flat-square" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
-  <a href="https://github.com/agenticmemo/agenticmemo/actions"><img src="https://img.shields.io/badge/tests-70%20passed-brightgreen?style=flat-square" alt="Tests"></a>
-  <a href="https://github.com/agenticmemo/agenticmemo"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome"></a>
+  <a href="https://github.com/MTXOLABS/agenticmemo"><img src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" alt="Alpha"></a>
+  <a href="https://github.com/MTXOLABS/agenticmemo"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome"></a>
 </p>
 
 <p>
@@ -24,72 +24,102 @@
 
 ---
 
-AgenticMemo is a production-ready Python framework for building **self-improving LLM agents**. It implements a complete four-phase learning system — temporal knowledge graph memory, GRPO-based retrieval, Reflexion failure loops, and multi-agent memory sharing — all without ever updating the underlying model weights.
+Escape is an **alpha Python memory backend** for existing agents. Its `AgentMemory`
+API retrieves bounded reference context and records experiences approved by your
+application's validator. Your agent retains its own execution loop, model, tools,
+permissions, and result format.
 
-Agents trained with AgenticMemo get better at their tasks simply by running them. Every execution is stored, filtered for quality, and made retrievable, so future tasks automatically benefit from past experience.
+**Escape is the new product name for AgenticMemo.** The distribution name, Python
+imports, and repository URL remain `agenticmemo` for compatibility. No import or
+database migration is required for the branding change.
 
-```python
-import asyncio
-from agenticmemo import Agent
-from agenticmemo.tools import PythonReplTool
-
-async def main():
-    agent = Agent.from_anthropic(api_key="sk-ant-...")
-    agent.add_tool(PythonReplTool())
-
-    # First run — no prior experience
-    result = await agent.run("Write a binary search function in Python")
-    print(result.final_answer)
-
-    # Subsequent runs — agent retrieves and applies past experience
-    result = await agent.run("Implement merge sort with the same style")
-    print(result.final_answer)   # benefits from the binary search case
-
-asyncio.run(main())
-```
+The repository also contains a bundled research agent runtime with graph memory,
+ensemble retrieval, verification, reflection, and learning components. Those are
+separate from the memory plug-in. Neither API guarantees better answers or lower
+costs; evaluate it on your own held-out tasks with independent validation.
 
 ---
 
-## Why AgenticMemo?
+## What Escape provides
 
-Traditional agent frameworks treat every task independently. AgenticMemo agents **accumulate knowledge** across tasks through a principled four-phase system:
+The memory plug-in supports:
 
-| | Original Memento | **AgenticMemo** |
-|---|---|---|
-| Memory storage | Flat case bank | **Temporal Knowledge Graph** |
-| Memory structure | None | **4-layer H-MEM hierarchy** |
-| Retrieval policy | Soft Q-learning | **GRPO (no critic, no backprop)** |
-| Similarity signal | Cosine only | **Semantic + BM25 + Graph + Temporal** |
-| Failure learning | None | **Reflexion self-correction loop** |
-| Trajectory quality | Store everything | **3-stage quality filter** |
-| Multi-agent | None | **Shared memory pool + consensus** |
-| Strategy distillation | None | **Hints internalization** |
+| Capability | Behavior |
+|---|---|
+| Knowledge and experience | Separate reference records from completed host attempts |
+| Retrieval eligibility | Exclude failed, unknown, expired, and stale experience or references as applicable |
+| Reference changes | Preserve older experience for inspection while removing it from recall |
+| Retrieval | Local lexical search by default; optional application-supplied embeddings |
+| Context limits | Budgeted excerpts with source provenance and an optional model tokenizer |
+| Integration | Explicit before/after hooks or a callable adapter that invokes the host once |
+| Persistence | Scoped SQLite records, idempotent recording, durable receipts, and restart recovery |
+| Management | Inspect, delete, clear, rebuild indexes, and explicitly import legacy data |
+
+Current limits: the disk store supports one owner on macOS/Linux, with concurrent
+tasks sharing that owner. Scopes are application-authorized labels, not access
+control. Storage is plaintext. This is not a distributed service; real-LLM quality
+and enterprise-scale performance still need evaluation. See the
+[integration guide](docs/PLUGIN_MEMORY.md) and [security policy](SECURITY.md).
 
 ---
 
 ## Installation
 
 ```bash
-# Minimal install (uses local sentence-transformers embeddings)
-pip install agenticmemo
-
-# With Anthropic / Claude support
-pip install agenticmemo[anthropic]
-
-# With OpenAI / GPT support
-pip install agenticmemo[openai]
-
-# Full install (all providers + dev tools)
-pip install agenticmemo[all]
+git clone https://github.com/MTXOLABS/agenticmemo.git
+cd agenticmemo
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[all,dev]"
 ```
 
-**Requirements:** Python 3.10+
+**Requirements:** Python 3.10+; macOS or Linux for the `AgentMemory` disk store.
+Install from the checkout to use the API documented here. Published `agenticmemo`
+releases may predate the plug-in and the Escape branding. The `all` extra installs
+both supported provider SDKs; it does not configure credentials or make API calls.
 
 ---
 
 ## Quick Start
 
-### Basic agent
+### Add memory to your existing agent
+
+`AgentMemory` supplies reference knowledge and validated experience while your
+agent keeps its own execution loop, tools, permissions, and result format.
+Adapt its supported context input to `invoke(task, extra_context=..., **kwargs)`,
+provide `normalize(result) -> ExperienceInput`, and optionally supply an
+independent `validator(task, result) -> ValidationResult`.
+
+```python
+from agenticmemo import AgentMemory
+
+async def run_existing(invoke, normalize, validator, task, *, scope, run_id):
+    memory = await AgentMemory.open("application-memory.sqlite")
+    try:
+        attached = memory.attach(invoke, normalize=normalize, validator=validator)
+        wrapped = await attached.run_with_receipt(task, scope=scope, run_id=run_id)
+        return wrapped.result, wrapped.receipt  # original host result + recording status
+    finally:
+        await memory.close()
+```
+
+The default retriever is local lexical search. A custom embedder is optional;
+there are no default paid calls, model downloads, or automatic learning steps.
+Only experiences with passing application validation and evidence are eligible
+for retrieval. Supply your model's `token_counter` for its exact token budget;
+the default counts UTF-8 bytes conservatively. Scopes are application-authorized
+partition labels. See the [two hooks, adapter, and migration guide](docs/PLUGIN_MEMORY.md)
+and run the [offline example](examples/plugin_memory.py):
+
+```bash
+.venv/bin/python -m examples.plugin_memory
+```
+
+### Bundled agent runtime
+
+These examples use the separate `Agent` runtime and require a configured model
+provider. Provider calls may incur costs. The optional tools execute with the
+process's permissions; read [SECURITY.md](SECURITY.md) before enabling them.
 
 ```python
 import asyncio
@@ -151,10 +181,9 @@ class DatabaseTool(Tool):
         )
 ```
 
-### Multi-agent memory sharing
+### Shared memory building block
 
 ```python
-from agenticmemo import Agent
 from agenticmemo.memory import SharedMemoryPool
 
 # Shared pool all agents read from and write to
@@ -162,12 +191,13 @@ pool = SharedMemoryPool(consensus_threshold=0.8)
 pool.register_agent("researcher")
 pool.register_agent("coder")
 
-researcher = Agent.from_anthropic(api_key="...")
-coder      = Agent.from_anthropic(api_key="...")
-
-# Both agents share the same global case bank
-# High-reward cases are automatically promoted to the consensus layer
+# In your orchestration code, explicitly write and read cases:
+# await pool.store_shared(case)
+# cases = await pool.all_cases_for("researcher")
 ```
+
+Registering names in a pool does not attach it to `Agent` instances. Your
+orchestration code must connect those reads and writes to the agents.
 
 ### Persistent memory across sessions
 
@@ -178,22 +208,36 @@ cfg = AgentConfig(
     memory=MemoryConfig(persist_path="./agent_memory.json")
 )
 
-# Session 1 — agent learns from tasks
+# Session 1 — eligible verified cases may be stored
 agent = Agent.from_anthropic(api_key="...", cfg=cfg)
 await agent.run("...")
 
-# Session 2 — agent loads and applies experience from session 1 automatically
+# Session 2 — agent loads stored cases for retrieval
 agent = Agent.from_anthropic(api_key="...", cfg=cfg)
-print(await agent.memory_size())  # non-zero from previous session
+print(await agent.memory_size())  # depends on which earlier outcomes were stored
 ```
 
 ---
 
 ## Architecture
 
+The existing-agent plug-in has a small integration surface:
+
+```text
+Task -> before_task -> bounded reference context -> your agent
+                                                    |
+                       your normalizer + validator <-+
+                                   |
+                              after_task
+                                   |
+                           scoped SQLite store
+```
+
+The bundled research runtime has a separate architecture:
+
 ```
                          ┌─────────────────────────────────────────┐
-                         │           AgenticMemo Agent              │
+                         │              Escape Agent                │
                          │                                          │
   Task ─────────────────►│  HintLibrary + EnsembleRetriever         │
                          │           │                              │
@@ -214,10 +258,11 @@ print(await agent.memory_size())  # non-zero from previous session
                          └─────────────────────────────────────────┘
 ```
 
-### Four learning phases
+### Bundled runtime components
 
 #### Phase 1 — Ensemble Retrieval
-Every case retrieval combines four independent signals to maximise relevance:
+The ensemble retriever combines four signals using configurable weights. With
+the default weights:
 
 ```
 score(query, case) = 0.5 × cosine(embed(query), embed(case))   # semantic
@@ -226,7 +271,7 @@ score(query, case) = 0.5 × cosine(embed(query), embed(case))   # semantic
                    + 0.1 × pagerank(case)                        # graph centrality
 ```
 
-Compared to cosine-only retrieval, this ensemble approach yields ~40% better precision on diverse task distributions.
+These weights describe implementation behavior, not a measured accuracy gain.
 
 #### Phase 2 — GRPO Policy + Reflexion
 **GRPO** (Group Relative Policy Optimisation) replaces the original soft Q-learning. Rather than learning absolute case values, it samples G candidate case sets per query, computes group-relative advantage from outcomes, and updates per-case Q-values. No critic model. No backpropagation.
@@ -242,7 +287,9 @@ Cases are stored in a NetworkX-based directed graph instead of a flat list:
 - **Temporal decay** — Stale cases are down-weighted, not deleted
 - **PageRank** — Frequently referenced cases score higher in retrieval
 
-Cases are also organised in a **4-layer H-MEM hierarchy** (Domain → Category → Trace → Episode) for O(log N) retrieval instead of O(N).
+Cases are also organised in a **4-layer H-MEM hierarchy** (Domain → Category →
+Trace → Episode). The ensemble retriever still scores its candidate cases;
+the hierarchy does not establish an O(log N) end-to-end retrieval guarantee.
 
 #### Phase 4 — Multi-Agent Memory + Hints Internalization
 **SharedMemoryPool** lets multiple agents share a global case bank with role-specific private memories, content-based deduplication, and a consensus layer for high-reward cases.
@@ -372,18 +419,15 @@ new_hints = await agent.extract_hints_now(domain="coding")
 
 ---
 
-## Performance
+## Evaluation
 
-Research-backed improvements over the original Memento baseline:
-
-| Component | Improvement | Source |
-|---|---|---|
-| Ensemble retrieval | ~40% better retrieval precision | USMB benchmark |
-| Reflexion failure loop | >18% accuracy on long-horizon tasks | EMNLP 2024 |
-| CLEANER trajectory filter | ~6% on hard reasoning tasks | arXiv 2601.15141 |
-| GRPO vs soft Q-learning | Faster convergence, no critic overhead | arXiv 2510.08191 |
-| Hierarchical memory | Better OOD generalisation | H-MEM paper |
-| Temporal graph memory | +1.4% deep retrieval accuracy | Zep arXiv 2501.13956 |
+The automated suite exercises integration contracts, validation, persistence,
+retrieval, and failure recovery with scripted hosts and local embeddings. It does
+not establish a real-model success rate or an enterprise throughput target.
+Compare the same host with no memory, an empty store, and a frozen store learned
+from separate tasks. Grade held-out results independently and include all model,
+embedding, validation, and storage overhead in the comparison. See the
+[acceptance guide](docs/PLUGIN_MEMORY.md#integration-acceptance).
 
 ---
 
@@ -394,7 +438,7 @@ Contributions are welcome. Please follow these steps:
 1. Fork the repository and create a feature branch
 2. Install the development dependencies:
    ```bash
-   pip install agenticmemo[dev]
+   pip install -e ".[all,dev]"
    ```
 3. Make your changes and add tests
 4. Ensure all tests pass:

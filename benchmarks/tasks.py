@@ -250,7 +250,7 @@ HARD_ALGO_TASKS: list[BenchTask] = [
 ]
 
 # Hard repeat/transfer tasks — structurally similar to hard tasks above
-# AgenticMemo should retrieve LRU → help LFU, Dijkstra → help Bellman-Ford, etc.
+# Escape should retrieve LRU → help LFU, Dijkstra → help Bellman-Ford, etc.
 HARD_REPEAT_TASKS: list[BenchTask] = [
     BenchTask(
         "Implement an LFU (Least Frequently Used) cache with capacity=3. "

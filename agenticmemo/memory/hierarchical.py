@@ -12,6 +12,7 @@ descending, giving effectively O(log N) retrieval instead of O(N).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections import defaultdict
 from collections.abc import Iterator
@@ -126,25 +127,38 @@ class HierarchicalMemory(MemoryBackend):
         )
         self._auto_classify = cfg.domain_auto_classify
         self._dedup = cfg.dedup_on_store
-        self._fingerprints: set[str] = set()
+        self._mutation_lock = asyncio.Lock()
+        self._fingerprints: dict[str, set[str]] = defaultdict(set)
+        self._case_fingerprints: dict[str, str] = {}
+        self._index_keys: dict[str, tuple[MemoryDomain, str, str]] = {}
 
         # Layer indices
         # domain  →  category  →  trace_id  →  [case_ids]
         self._index: dict[MemoryDomain, dict[str, dict[str, list[str]]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(list))
         )
+        # Graph persistence loads synchronously during construction. Rebuild
+        # derived state too, so domain lookup and dedup survive a restart.
+        self._rebuild_indexes()
 
     # ------------------------------------------------------------------ #
     # MemoryBackend interface
     # ------------------------------------------------------------------ #
 
     async def store(self, case: Case) -> None:
+        async with self._mutation_lock:
+            try:
+                await self._store_case(case)
+            except (Exception, asyncio.CancelledError):
+                self._rebuild_indexes()
+                raise
+
+    async def _store_case(self, case: Case) -> None:
         # Dedup (Phase 4.1): identical experiences add retrieval noise
         if self._dedup:
             fp = self._fingerprint(case)
-            if fp in self._fingerprints:
+            if self._fingerprints.get(fp, set()) - {case.id}:
                 return
-            self._fingerprints.add(fp)
 
         # Auto-classify if needed
         if self._auto_classify and case.domain == MemoryDomain.GENERAL:
@@ -154,25 +168,36 @@ class HierarchicalMemory(MemoryBackend):
         if not case.keywords:
             case.keywords = extract_keywords(case.task)
 
-        # Derive a coarse trace key from the first 2 keywords
-        trace_key = "_".join(case.keywords[:2]) if case.keywords else "default"
-
+        at_capacity = len(self._index_keys) >= self._graph.max_cases
         await self._graph.store(case)
-        self._index[case.domain][case.category][trace_key].append(case.id)
+        if at_capacity:
+            # Eviction belongs to the graph backend; retire its derived keys
+            # only when a capacity mutation could have removed a case.
+            live_ids = {c.id for c in await self._graph.all_cases()}
+            for stale_id in self._index_keys.keys() - live_ids:
+                self._unindex_case(stale_id)
+        self._unindex_case(case.id)
+        self._index_case(case)
 
     async def get(self, case_id: str) -> Case | None:
         return await self._graph.get(case_id)
 
     async def delete(self, case_id: str) -> bool:
-        case = await self._graph.get(case_id)
-        if not case:
-            return False
-        trace_key = "_".join(case.keywords[:2]) if case.keywords else "default"
-        try:
-            self._index[case.domain][case.category][trace_key].remove(case_id)
-        except ValueError:
-            pass
-        return await self._graph.delete(case_id)
+        async with self._mutation_lock:
+            try:
+                deleted = await self._graph.delete(case_id)
+                self._unindex_case(case_id)
+                return deleted
+            except (Exception, asyncio.CancelledError):
+                self._rebuild_indexes()
+                raise
+
+    async def clear(self) -> None:
+        async with self._mutation_lock:
+            try:
+                await self._graph.clear()
+            finally:
+                self._rebuild_indexes()
 
     async def all_cases(self) -> list[Case]:
         return await self._graph.all_cases()
@@ -213,8 +238,57 @@ class HierarchicalMemory(MemoryBackend):
     def graph(self) -> TemporalGraphMemory:
         return self._graph
 
+    def _rebuild_indexes(self) -> None:
+        self._index.clear()
+        self._index_keys.clear()
+        self._fingerprints.clear()
+        self._case_fingerprints.clear()
+        for domain in MemoryDomain:
+            for case in self._graph.cases_by_domain(domain):
+                self._index_case(case)
+
+    def _index_case(self, case: Case) -> None:
+        trace_key = "_".join(case.keywords[:2]) if case.keywords else "default"
+        self._index[case.domain][case.category][trace_key].append(case.id)
+        self._index_keys[case.id] = (case.domain, case.category, trace_key)
+        fp = self._fingerprint(case)
+        self._case_fingerprints[case.id] = fp
+        self._fingerprints[fp].add(case.id)
+
+    def _unindex_case(self, case_id: str) -> None:
+        keys = self._index_keys.pop(case_id, None)
+        if keys is not None:
+            domain, category, trace_key = keys
+            traces = self._index[domain][category]
+            traces[trace_key].remove(case_id)
+            if not traces[trace_key]:
+                del traces[trace_key]
+            if not traces:
+                del self._index[domain][category]
+            if not self._index[domain]:
+                del self._index[domain]
+        fp = self._case_fingerprints.pop(case_id, None)
+        if fp is not None:
+            ids = self._fingerprints[fp]
+            ids.discard(case_id)
+            if not ids:
+                del self._fingerprints[fp]
+
     @staticmethod
     def _fingerprint(case: Case) -> str:
         import hashlib  # noqa: PLC0415
-        text = " ".join((case.task.lower().strip() + case.outcome.answer.lower().strip()).split())
+        import json  # noqa: PLC0415
+
+        verification = case.trajectory.metadata.get("verification")
+        verdict = verification.get("verdict") if isinstance(verification, dict) else None
+        if not isinstance(verdict, str):
+            verdict = None
+        # Distinct outcomes must not block later validated successes. Keep
+        # normalized text dedup, while separating outcome and validation state.
+        text = json.dumps([
+            " ".join(case.task.lower().split()),
+            " ".join(case.outcome.answer.lower().split()),
+            case.outcome.status.value,
+            verdict,
+        ])
         return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()

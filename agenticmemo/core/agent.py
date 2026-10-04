@@ -1,10 +1,10 @@
-"""AgenticMemo — the main Agent class.
+"""Escape — the main Agent class.
 
 Orchestrates the full Planner-Executor-Memory loop with all 4 phases
-+ 3 AgenticMemo v2 innovations:
++ 3 Escape v2 innovations:
 
   ┌───────────────────────────────────────────────────────────────────────┐
-  │                        AgenticMemo v2 Loop                            │
+  │                        Escape v2 Loop                            │
   │                                                                        │
   │  Task ──→ HintLibrary + SkillLibrary + FailurePatterns                │
   │                  + Retriever ──────────────→ Planner ──→ Executor    │
@@ -25,7 +25,7 @@ Learning mechanisms (no LLM weights ever updated):
   Phase 3 — Temporal Knowledge Graph + Hierarchical memory (H-MEM)
   Phase 4 — Multi-agent SharedMemoryPool + HintExtractor internalization
 
-AgenticMemo v2 Innovations:
+Escape v2 Innovations:
   CFM  — Causal Failure Mining: anti-case bank injected at planning time
   ESMC — Episodic-to-Semantic Memory Consolidation: skill distillation
   DMER — Dynamic Mid-Execution Retrieval: memory refresh at each N steps
@@ -33,6 +33,7 @@ AgenticMemo v2 Innovations:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -45,7 +46,7 @@ from ..learning.grpo import GRPOPolicy
 from ..learning.hints import HintExtractor, HintLibrary
 from ..learning.reflexion import ReflexionEngine
 from ..learning.skill_consolidator import SkillConsolidator, SkillLibrary
-from ..learning.verifier import OutcomeVerifier
+from ..learning.verifier import OutcomeVerifier, VerificationResult
 from ..llm.accounting import TaggedLLM, TokenLedger
 from ..llm.anthropic_llm import AnthropicLLM
 from ..llm.base import LLMBackend
@@ -135,9 +136,16 @@ class Agent:
 
         # Persistence paths for the auxiliary learning stores
         _base = self._cfg.memory.persist_path
-        _failure_path = (_base.replace(".json", "_failures.json") if _base else None)
-        _skills_path  = (_base.replace(".json", "_skills.json")   if _base else None)
-        _hints_path   = (_base.replace(".json", "_hints.json")    if _base else None)
+
+        def sidecar(name: str) -> str | None:
+            if not _base:
+                return None
+            path = Path(_base)
+            return str(path.with_name(f"{path.stem}_{name}.json"))
+
+        _failure_path = sidecar("failures")
+        _skills_path = sidecar("skills")
+        _hints_path = sidecar("hints")
 
         # Learning — Phase 4: hints internalization
         self._hint_library = HintLibrary(persist_path=_hints_path)
@@ -229,11 +237,12 @@ class Agent:
             domain: Optional domain hint for targeted retrieval.
         """
         if self._cfg.verbose:
-            _console.print(Panel(f"[bold cyan]Task:[/] {task}", title="AgenticMemo"))
+            _console.print(Panel(f"[bold cyan]Task:[/] {task}", title="Escape"))
 
         ledger_before = self._ledger.snapshot()
         reflection: str | None = None
         trajectory: Trajectory | None = None
+        verification = VerificationResult()
 
         for attempt in range(self._cfg.max_retries + 1):
             if attempt > 0 and self._cfg.verbose:
@@ -324,7 +333,12 @@ class Agent:
 
             # 3.5 Verify outcome — the executor's SUCCESS only means "produced
             # a final answer"; the verifier judges whether it solves the task.
-            trajectory.status = await self._verifier.verify(task, trajectory)
+            verification = await self._verifier.verify_detailed(task, trajectory)
+            trajectory.metadata["verification"] = verification.model_dump(mode="json")
+            trajectory.status = verification.verdict or (
+                TaskStatus.FAILURE
+                if trajectory.status == TaskStatus.FAILURE else TaskStatus.PARTIAL
+            )
 
             if self._cfg.verbose:
                 status_color = "green" if trajectory.status == TaskStatus.SUCCESS else "red"
@@ -335,7 +349,7 @@ class Agent:
                 )
 
             # 4. Reflexion retry check
-            if not self._reflexion.should_retry(trajectory, attempt):
+            if not verification.verified or not self._reflexion.should_retry(trajectory, attempt):
                 break
 
             reflection = await self._reflexion.reflect(task, trajectory)
@@ -346,7 +360,7 @@ class Agent:
         assert trajectory is not None
 
         # 5. Assign reward
-        reward = self._filter.assign_reward(trajectory)
+        reward = self._filter.assign_reward(trajectory) if verification.verified else 0.0
         trajectory.reward = reward
 
         # Quality filter + store. Successes must pass the full filter;
@@ -357,18 +371,21 @@ class Agent:
         if trajectory.status == TaskStatus.SUCCESS:
             passed = await self._filter.filter_single(
                 task, trajectory,
-                verified=self._cfg.learning.enable_verification,
+                verified=verification.passed,
             )
         else:
             passed = self._filter.structural_ok(trajectory)
-        if passed and reward >= self._cfg.memory.min_reward_to_store:
+        if verification.verified and passed and reward >= self._cfg.memory.min_reward_to_store:
             # Lazy learning: ≤2-step runs carry no strategy worth mining —
             # store the case but skip the periodic learning machinery.
-            await self._store_case(
-                task, trajectory, retrieved_cases, domain,
-                learn=trajectory.num_steps > 2,
-                plan=plan,
-            )
+            try:
+                await self._store_case(
+                    task, trajectory, retrieved_cases, domain,
+                    learn=verification.verified and trajectory.num_steps > 2,
+                    plan=plan,
+                )
+            except Exception as exc:
+                self._record_learning_error(trajectory, "memory", exc)
 
         trajectory.metadata["token_breakdown"] = self._ledger.delta_since(ledger_before)
         return trajectory
@@ -403,6 +420,8 @@ class Agent:
         )
 
         await self._memory.store(case)
+        if await self._memory.get(case.id) is None:
+            return  # content dedup skipped this case; do not learn from it twice
         await self._retriever.index_case(case)
 
         # Graph edges to retrieved cases
@@ -410,27 +429,37 @@ class Agent:
             self._memory.graph.add_edge(case.id, prior.id)
 
         # GRPO update (Phase 2)
-        self._grpo.record_outcome(
-            case_ids=[c.id for c in retrieved_cases],
-            reward=trajectory.reward,
-        )
+        known_verdict = trajectory.metadata.get("verification", {}).get("verdict")
+        if known_verdict is not None and self._cfg.retrieval.enable_grpo:
+            self._grpo.record_outcome(
+                case_ids=[c.id for c in retrieved_cases],
+                reward=trajectory.reward,
+            )
         all_cases = await self._memory.all_cases()
         case_map = {c.id: c for c in all_cases}
-        updated = self._grpo.update(case_map)
+        updated = self._grpo.update(case_map) if known_verdict is not None else 0
         if updated and self._cfg.verbose:
             _console.print(f"[dim]GRPO updated {updated} case Q-values[/]")
 
         if not learn:
             return  # trivial run: case stored + GRPO updated, no LLM learning
 
+        learning_cases = [c for c in all_cases if self._has_verified_outcome(c)]
+
         # Phase 4: periodic hint extraction
         self._cases_since_hint_extract += 1
         if self._cases_since_hint_extract >= _HINT_EXTRACT_EVERY:
             self._cases_since_hint_extract = 0
             domain_str = case.domain.value
-            new_hints = await self._hint_extractor.extract(all_cases, domain=domain_str)
-            if new_hints and self._cfg.verbose:
-                _console.print(f"[dim]Extracted {len(new_hints)} new hints[/]")
+            try:
+                new_hints = await self._hint_extractor.extract(
+                    [c for c in learning_cases if c.is_success and c.domain == case.domain],
+                    domain=domain_str,
+                )
+                if new_hints and self._cfg.verbose:
+                    _console.print(f"[dim]Extracted {len(new_hints)} new hints[/]")
+            except Exception as exc:
+                self._record_learning_error(trajectory, "hints", exc)
 
         # v2 CFM: periodic failure pattern mining
         if trajectory.status == TaskStatus.SUCCESS:
@@ -439,15 +468,35 @@ class Agent:
             self._failure_miner.record_failure()
 
         if self._failure_miner.should_mine(_FAILURE_MINE_EVERY):
-            new_patterns = await self._failure_miner.mine(all_cases)
-            if new_patterns and self._cfg.verbose:
-                _console.print(f"[dim]CFM: mined {len(new_patterns)} new failure patterns[/]")
+            try:
+                new_patterns = await self._failure_miner.mine(learning_cases)
+                if new_patterns and self._cfg.verbose:
+                    _console.print(f"[dim]CFM: mined {len(new_patterns)} new failure patterns[/]")
+            except Exception as exc:
+                self._record_learning_error(trajectory, "failure_mining", exc)
 
         # v2 ESMC: periodic skill consolidation
         if self._skill_consolidator.should_consolidate(_SKILL_CONSOLIDATE_EVERY):
-            new_skills = await self._skill_consolidator.consolidate(all_cases)
-            if new_skills and self._cfg.verbose:
-                _console.print(f"[dim]ESMC: distilled {len(new_skills)} new skills[/]")
+            try:
+                new_skills = await self._skill_consolidator.consolidate(learning_cases)
+                if new_skills and self._cfg.verbose:
+                    _console.print(f"[dim]ESMC: distilled {len(new_skills)} new skills[/]")
+            except Exception as exc:
+                self._record_learning_error(trajectory, "skills", exc)
+
+    @staticmethod
+    def _has_verified_outcome(case: Case) -> bool:
+        verification = case.trajectory.metadata.get("verification")
+        return (
+            isinstance(verification, dict)
+            and verification.get("verdict") == case.outcome.status.value
+        )
+
+    @staticmethod
+    def _record_learning_error(trajectory: Trajectory, stage: str, exc: Exception) -> None:
+        trajectory.metadata.setdefault("learning_errors", []).append(
+            f"{stage}: {type(exc).__name__}"
+        )
 
     # ------------------------------------------------------------------ #
     # Memory management
@@ -551,7 +600,12 @@ class Agent:
     async def extract_hints_now(self, domain: str = "general") -> int:
         """Manually trigger hint extraction. Returns number of new hints."""
         cases = await self._memory.all_cases()
-        new = await self._hint_extractor.extract(cases, domain=domain)
+        eligible = [
+            c for c in cases
+            if c.is_success and c.domain.value == domain
+            and self._has_verified_outcome(c)
+        ]
+        new = await self._hint_extractor.extract(eligible, domain=domain)
         return len(new)
 
     # ------------------------------------------------------------------ #

@@ -2,7 +2,7 @@ from .filters import TrajectoryFilter
 from .grpo import GRPOPolicy
 from .hints import Hint, HintExtractor, HintLibrary
 from .reflexion import ReflexionEngine
-from .verifier import OutcomeVerifier
+from .verifier import OutcomeVerifier, VerificationResult
 
 __all__ = [
     "TrajectoryFilter",
@@ -12,4 +12,5 @@ __all__ = [
     "HintLibrary",
     "Hint",
     "OutcomeVerifier",
+    "VerificationResult",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -65,6 +66,9 @@ class SentenceTransformerEmbeddings(EmbeddingBackend):
             ) from e
 
     async def encode(self, texts: list[str]) -> np.ndarray:
+        return await asyncio.to_thread(self._encode_sync, texts)
+
+    def _encode_sync(self, texts: list[str]) -> np.ndarray:
         self._load()
         if not texts:
             return np.zeros((0, 384), dtype=np.float32)

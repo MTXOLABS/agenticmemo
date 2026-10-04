@@ -1,4 +1,4 @@
-# Security Policy
+# Escape Security Policy
 
 ## Supported versions
 
@@ -11,7 +11,7 @@
 
 Please report security issues **privately** — do not open a public GitHub issue.
 
-- Email: **animaytiwari123@gmail.com** with subject line `[SECURITY] agenticmemo`
+- Email: **animaytiwari123@gmail.com** with subject line `[SECURITY] Escape (agenticmemo)`
 - Include: affected version, reproduction steps, and impact assessment if known.
 
 You will receive an acknowledgement within 72 hours. We ask for up to 90 days to
@@ -19,8 +19,11 @@ ship a fix before public disclosure.
 
 ## Security model — read this before deploying
 
-AgenticMemo executes LLM-driven workflows. Like every agent framework, its security
-depends heavily on **how you deploy it**. Know these boundaries:
+Escape provides memory for existing agents and a bundled LLM agent runtime.
+The `AgentMemory` plug-in supplies context and records application-approved data;
+it does not execute retrieved code or tools. The bundled `Agent` runtime can
+execute LLM-driven workflows. Security depends on **how you deploy and connect
+these components**. Know these boundaries:
 
 ### 1. `PythonReplTool` executes arbitrary code — unsandboxed
 
@@ -45,15 +48,21 @@ into future prompts**. If an attacker can influence what gets stored (e.g., via 
 scraped webpage that manipulates the agent's trajectory), they can plant instructions
 that resurface in later, unrelated tasks ("stored prompt injection").
 
-Mitigations built in: tool outputs are truncated, trajectories pass a quality filter,
-and outcome verification reduces the chance of storing manipulated "successes."
+The plug-in excludes failed, unknown, and stale experience from retrieval, but
+passing validation is a declaration by the calling application. It is not proof
+that content is safe. Retrieved context must remain untrusted data. Scope labels
+partition records; the application must authorize scope access.
+
+In the bundled runtime, tool outputs are truncated, and trajectory filtering and
+outcome verification can help assess which experiences to retain.
 Mitigations you should add for hostile-input deployments: review memory contents
 periodically, use a separate memory file per trust domain, and never share a memory
 pool between trusted and untrusted workloads.
 
 ### 4. Memory files are plaintext
 
-Persisted memory (`*.json`) contains full task text, tool inputs/outputs, and answers.
+Persisted memory (SQLite databases and legacy `*.json` files) may contain task
+text, approved actions and metadata, tool inputs/outputs, and answers.
 Treat these files with the same sensitivity as application logs: exclude them from
 backups you don't control, don't commit them, and encrypt at rest if tasks contain
 confidential data.
@@ -61,4 +70,5 @@ confidential data.
 ### 5. API keys
 
 Keys are passed to the official Anthropic/OpenAI SDKs and are never logged or
-persisted by AgenticMemo. Prefer environment variables over hardcoding keys.
+persisted as configuration by Escape. Prefer environment variables over hardcoding
+keys, and exclude credentials from task text, tool output, and memory payloads.

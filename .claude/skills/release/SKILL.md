@@ -1,9 +1,9 @@
 ---
 name: release
-description: Cut and publish an AgenticMemo release to PyPI the safe way — preflight checks, synchronized version bump, build, fresh-venv install test, upload, tag. Use whenever the user wants to release, publish, ship a version, push to PyPI, bump the version, or "make v2.x live".
+description: Cut and publish an Escape release to PyPI the safe way — preflight checks, synchronized version bump, build, fresh-venv install test, upload, tag. Use whenever the user wants to release, publish, ship a version, push to PyPI, bump the version, or "make v2.x live".
 ---
 
-# AgenticMemo Release Process
+# Escape Release Process
 
 Releases are irreversible (PyPI versions can't be re-uploaded), so the order below
 matters. Get explicit user confirmation before the actual `twine upload` step.

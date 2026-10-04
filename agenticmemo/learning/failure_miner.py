@@ -1,4 +1,4 @@
-"""Causal Failure Mining (CFM) — AgenticMemo v2.
+"""Causal Failure Mining (CFM) — Escape v2.
 
 Systematically mines failed trajectories for recurring failure patterns,
 builds an anti-case bank, and generates actionable failure warnings
@@ -345,7 +345,8 @@ class FailureMiner:
                 ) / max(1, len(cases))
                 p = FailurePattern(
                     id=hashlib.md5(  # fingerprint only, not cryptographic
-                        (domain + item.get("trigger", "") + item.get("mistake", "")).encode()
+                        (domain + item.get("trigger", "") + item.get("mistake", "")).encode(),
+                        usedforsecurity=False,
                     ).hexdigest()[:12],
                     domain=domain,
                     trigger=item.get("trigger", ""),

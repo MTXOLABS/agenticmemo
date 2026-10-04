@@ -1,4 +1,4 @@
-"""Episodic-to-Semantic Memory Consolidation — AgenticMemo v2.
+"""Episodic-to-Semantic Memory Consolidation — Escape v2.
 
 Converts accumulated episodic (raw trajectory) memories into compact,
 reusable SEMANTIC SKILLS — abstract procedural knowledge that transfers
@@ -318,7 +318,8 @@ class SkillConsolidator:
             skills = []
             for item in data:
                 skill_id = hashlib.md5(  # fingerprint only, not cryptographic
-                    (domain + item.get("name", "") + item.get("trigger", "")).encode()
+                    (domain + item.get("name", "") + item.get("trigger", "")).encode(),
+                    usedforsecurity=False,
                 ).hexdigest()[:12]
                 skills.append(Skill(
                     id=skill_id,

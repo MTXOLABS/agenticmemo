@@ -9,9 +9,12 @@ Replaces the flat Case Bank with a NetworkX-based directed graph where:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+from collections.abc import Callable
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import networkx as nx
@@ -57,6 +60,8 @@ class TemporalGraphMemory(MemoryBackend):
         # SQLite backend (path ending in .db): incremental single-row writes
         # instead of rewriting the whole JSON on every store — O(1) vs O(N).
         self._sqlite = None
+        self._mutation_lock = asyncio.Lock()
+        self._state_lock = RLock()
         if self._persist_path and self._persist_path.suffix == ".db":
             self._sqlite = self._open_sqlite(self._persist_path)
         if self._persist_path:
@@ -70,44 +75,58 @@ class TemporalGraphMemory(MemoryBackend):
     # ------------------------------------------------------------------ #
 
     async def store(self, case: Case) -> None:
-        if len(self._cases) >= self.max_cases:
-            await self._evict_oldest()
+        async with self._mutation_lock:
+            if case.id not in self._cases and len(self._cases) >= self.max_cases:
+                await self._evict_oldest()
 
-        self._cases[case.id] = case
-        self._graph.add_node(case.id, **self._node_attrs(case))
-        self._pagerank_cache = None
+            with self._state_lock:
+                self._cases[case.id] = case
+                self._graph.add_node(case.id, **self._node_attrs(case))
+                self._pagerank_cache = None
 
-        if self._sqlite is not None:
-            self._sqlite.execute(
-                "INSERT OR REPLACE INTO cases (id, data) VALUES (?, ?)",
-                (case.id, json.dumps(case.model_dump(mode="json"), default=str)),
-            )
-            self._sqlite.commit()
-        elif self._persist_path:
-            self._save()
+            if self._sqlite is not None:
+                await self._run_persistence(self._save_sqlite_case, case)
+            elif self._persist_path:
+                await self._run_persistence(self._save)
 
     async def get(self, case_id: str) -> Case | None:
-        case = self._cases.get(case_id)
-        if case:
-            case.touch()
-        return case
+        with self._state_lock:
+            case = self._cases.get(case_id)
+            if case:
+                case.touch()
+            return case
 
     async def delete(self, case_id: str) -> bool:
-        if case_id not in self._cases:
-            return False
-        del self._cases[case_id]
-        self._graph.remove_node(case_id)
-        self._pagerank_cache = None
+        async with self._mutation_lock:
+            return await self._delete_case(case_id)
+
+    async def _delete_case(self, case_id: str) -> bool:
+        with self._state_lock:
+            if case_id not in self._cases:
+                return False
+            del self._cases[case_id]
+            self._graph.remove_node(case_id)
+            self._pagerank_cache = None
         if self._sqlite is not None:
-            self._sqlite.execute("DELETE FROM cases WHERE id = ?", (case_id,))
-            self._sqlite.execute(
-                "DELETE FROM edges WHERE src = ? OR dst = ?", (case_id, case_id)
-            )
-            self._sqlite.commit()
+            await self._run_persistence(self._delete_sqlite_case, case_id)
+        elif self._persist_path:
+            await self._run_persistence(self._save)
         return True
 
+    async def clear(self) -> None:
+        async with self._mutation_lock:
+            with self._state_lock:
+                self._cases.clear()
+                self._graph.clear()
+                self._pagerank_cache = None
+            if self._sqlite is not None:
+                await self._run_persistence(self._clear_sqlite)
+            elif self._persist_path:
+                await self._run_persistence(self._save)
+
     async def all_cases(self) -> list[Case]:
-        return list(self._cases.values())
+        with self._state_lock:
+            return list(self._cases.values())
 
     async def size(self) -> int:
         return len(self._cases)
@@ -123,19 +142,27 @@ class TemporalGraphMemory(MemoryBackend):
         edge_type: str = EdgeType.SIMILAR,
         weight: float = 1.0,
     ) -> None:
-        if src_id not in self._graph or dst_id not in self._graph:
-            return
-        # Limit degree
-        if self._graph.out_degree(src_id) >= self.max_edges:
-            return
-        self._graph.add_edge(src_id, dst_id, type=edge_type, weight=weight)
-        self._pagerank_cache = None
-        if self._sqlite is not None:
-            self._sqlite.execute(
-                "INSERT OR REPLACE INTO edges (src, dst, type, weight) VALUES (?, ?, ?, ?)",
-                (src_id, dst_id, edge_type, weight),
-            )
-            self._sqlite.commit()
+        with self._state_lock:
+            if src_id not in self._graph or dst_id not in self._graph:
+                return
+            # Limit degree, without preventing an existing relationship update.
+            if (
+                not self._graph.has_edge(src_id, dst_id)
+                and self._graph.out_degree(src_id) >= self.max_edges
+            ):
+                return
+            self._graph.add_edge(src_id, dst_id, type=edge_type, weight=weight)
+            self._pagerank_cache = None
+            if self._sqlite is not None:
+                self._sqlite.execute(
+                    "INSERT OR REPLACE INTO edges (src, dst, type, weight) VALUES (?, ?, ?, ?)",
+                    (src_id, dst_id, edge_type, weight),
+                )
+                self._sqlite.commit()
+            elif self._persist_path:
+                # Preserve the synchronous public edge API, matching SQLite's
+                # existing immediate durability behavior.
+                self._save()
 
     def neighbors(self, case_id: str, edge_type: str | None = None) -> list[Case]:
         """Return cases connected to the given case (1-hop)."""
@@ -217,18 +244,59 @@ class TemporalGraphMemory(MemoryBackend):
     def _save(self) -> None:
         if not self._persist_path:
             return
-        self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "cases": [c.model_dump(mode="json") for c in self._cases.values()],
-            "edges": [
-                {"src": u, "dst": v, **d}
-                for u, v, d in self._graph.edges(data=True)
-            ],
-        }
-        # Atomic write: a crash mid-write must not corrupt the memory file
-        tmp = self._persist_path.with_suffix(self._persist_path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, default=str))
-        tmp.replace(self._persist_path)
+        with self._state_lock:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "cases": [c.model_dump(mode="json") for c in self._cases.values()],
+                "edges": [
+                    {"src": u, "dst": v, **d}
+                    for u, v, d in self._graph.edges(data=True)
+                ],
+            }
+            # Atomic write: a crash mid-write must not corrupt the memory file.
+            tmp = self._persist_path.with_suffix(self._persist_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, default=str))
+            tmp.replace(self._persist_path)
+
+    @staticmethod
+    async def _run_persistence(operation: Callable[..., None], *args: Any) -> None:
+        """Keep mutation ownership until a worker settles, even after cancellation."""
+        worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError as cancellation:
+            try:
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                worker.result()
+            except Exception:
+                raise cancellation from None
+            raise
+
+    def _save_sqlite_case(self, case: Case) -> None:
+        with self._state_lock:
+            self._sqlite.execute(
+                "INSERT OR REPLACE INTO cases (id, data) VALUES (?, ?)",
+                (case.id, json.dumps(case.model_dump(mode="json"), default=str)),
+            )
+            self._sqlite.commit()
+
+    def _delete_sqlite_case(self, case_id: str) -> None:
+        with self._state_lock:
+            self._sqlite.execute("DELETE FROM cases WHERE id = ?", (case_id,))
+            self._sqlite.execute(
+                "DELETE FROM edges WHERE src = ? OR dst = ?", (case_id, case_id)
+            )
+            self._sqlite.commit()
+
+    def _clear_sqlite(self) -> None:
+        with self._state_lock:
+            self._sqlite.execute("DELETE FROM cases")
+            self._sqlite.execute("DELETE FROM edges")
+            self._sqlite.commit()
 
     def _load(self) -> None:
         try:
@@ -239,7 +307,8 @@ class TemporalGraphMemory(MemoryBackend):
                 self._graph.add_node(case.id, **self._node_attrs(case))
             for edge in data.get("edges", []):
                 src, dst = edge.pop("src"), edge.pop("dst")
-                self._graph.add_edge(src, dst, **edge)
+                if src in self._cases and dst in self._cases:
+                    self._graph.add_edge(src, dst, **edge)
         except Exception as e:
             raise MemoryError(f"Failed to load memory from {self._persist_path}: {e}") from e
 
@@ -275,4 +344,4 @@ class TemporalGraphMemory(MemoryBackend):
                 c.created_at,
             ),
         )
-        await self.delete(victim.id)
+        await self._delete_case(victim.id)

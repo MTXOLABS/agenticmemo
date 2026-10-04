@@ -82,7 +82,9 @@ class EnsembleRetriever:
             domain:    Restrict search to a specific memory domain.
             min_score: Drop cases below this ensemble score.
         """
-        top_k = top_k or self._cfg.top_k
+        top_k = self._cfg.top_k if top_k is None else top_k
+        if top_k <= 0:
+            return []
         min_score = min_score if min_score is not None else self._cfg.min_similarity
 
         # 1. Candidate pool
@@ -160,6 +162,8 @@ class EnsembleRetriever:
         cases = await self._memory.all_cases()
         texts = [c.task for c in cases]
         if not texts:
+            self._embed_cache.clear()
+            self._bm25 = BM25Index()
             return
         vecs = await self._embedder.encode(texts)
         self._embed_cache.clear()

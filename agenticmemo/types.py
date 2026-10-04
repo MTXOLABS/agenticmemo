@@ -1,4 +1,4 @@
-"""Core type definitions for AgenticMemo."""
+"""Core type definitions for Escape."""
 
 from __future__ import annotations
 

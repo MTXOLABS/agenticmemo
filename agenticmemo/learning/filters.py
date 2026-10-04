@@ -17,6 +17,7 @@ Stage 3 — Reward variance filter
 from __future__ import annotations
 
 import statistics
+from math import isfinite
 
 from ..config import LearningConfig
 from ..llm.base import LLMBackend
@@ -144,9 +145,13 @@ class TrajectoryFilter:
             )
             import json  # noqa: PLC0415
             data = json.loads(resp.content.strip())
-            return float(data.get("score", 0.5))
+            value = data.get("score")
+            if isinstance(value, bool):
+                return 0.0
+            score = float(value)
+            return score if isfinite(score) and 0.0 <= score <= 1.0 else 0.0
         except Exception:
-            return 0.5  # default to pass on eval errors
+            return 0.0  # unknown quality must not admit an unverified success
 
     def _variance_filter(
         self, items: list[tuple[str, Trajectory]]

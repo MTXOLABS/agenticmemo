@@ -1,9 +1,9 @@
-"""Example: Demonstrate how memory improves performance over multiple tasks.
+"""Escape example: Inspect memory across multiple tasks.
 
-This example runs the same agent on similar tasks and shows that:
-1. Later tasks benefit from experience stored from earlier tasks.
-2. GRPO shifts Q-values toward useful cases over time.
-3. Memory persists across runs (if persist_path is set).
+This example runs the same agent on similar tasks and reports its steps, tokens,
+stored cases, and GRPO statistics. It uses persistent memory. These observations
+do not establish a quality or performance improvement; that requires a controlled
+evaluation against the same agent without memory.
 
 Run:
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -21,10 +21,10 @@ TASKS = [
     # Round 1: warm up
     "Write a Python function to reverse a string.",
     "Write a Python function to check if a string is a palindrome.",
-    # Round 2: benefits from round 1 memory
+    # Round 2: similar tasks can retrieve earlier stored experience
     "Write a Python function to count vowels in a string.",
     "Write a Python function that returns the longest word in a sentence.",
-    # Round 3: benefits more
+    # Round 3: another task in the same domain
     "Write a Python function that removes duplicate characters from a string.",
 ]
 
@@ -40,7 +40,7 @@ async def main() -> None:
     )
     agent.add_tool(PythonReplTool())
 
-    print("AgentMemento — Memory accumulation demo")
+    print("Escape — Memory accumulation demo")
     print("="*55)
 
     for i, task in enumerate(TASKS, 1):

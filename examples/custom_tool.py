@@ -1,4 +1,4 @@
-"""Example: Defining a custom tool with the @tool decorator.
+"""Escape example: Defining a custom tool with the @tool decorator.
 
 Run:
     export ANTHROPIC_API_KEY=sk-ant-...

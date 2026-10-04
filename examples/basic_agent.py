@@ -1,4 +1,4 @@
-"""Basic AgenticMemo example — coding assistant with memory.
+"""Basic Escape example — coding assistant with memory.
 
 Run:
     export ANTHROPIC_API_KEY=sk-ant-...

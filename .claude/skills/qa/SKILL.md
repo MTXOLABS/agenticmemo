@@ -1,9 +1,9 @@
 ---
 name: qa
-description: Run the full AgenticMemo quality gate — tests, lint, security scan, and import check. Use this after ANY code change to the agenticmemo package, before every commit, and whenever the user says "run tests", "check the code", "is everything green", "verify", or finishes a feature/fix. Also use it when a session starts with uncommitted changes, to establish a known-good baseline.
+description: Run the full Escape quality gate — tests, lint, security scan, and import check. Use this after ANY code change to the agenticmemo package, before every commit, and whenever the user says "run tests", "check the code", "is everything green", "verify", or finishes a feature/fix. Also use it when a session starts with uncommitted changes, to establish a known-good baseline.
 ---
 
-# AgenticMemo Quality Gate
+# Escape Quality Gate
 
 Run all four checks. A change is "done" only when every one passes.
 Always use the project venv at `.venv/` — the system Python does not have the deps.

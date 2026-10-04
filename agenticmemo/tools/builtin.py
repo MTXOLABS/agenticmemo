@@ -1,4 +1,4 @@
-"""Built-in tools bundled with AgenticMemo."""
+"""Built-in tools bundled with Escape."""
 
 from __future__ import annotations
 

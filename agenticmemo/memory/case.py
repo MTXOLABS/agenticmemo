@@ -1,4 +1,4 @@
-"""Case — the atomic unit stored in AgenticMemo's memory."""
+"""Case — the atomic unit stored in Escape's memory."""
 
 from __future__ import annotations
 

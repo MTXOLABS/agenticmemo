@@ -1,4 +1,4 @@
-# AgenticMemo — project instructions
+# Escape — project instructions
 
 Python framework for self-improving LLM agents (memory + retrieval + learning, no
 fine-tuning). Package code in `agenticmemo/`; always use the venv at `.venv/`.

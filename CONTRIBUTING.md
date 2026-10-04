@@ -1,13 +1,16 @@
-# Contributing to AgenticMemo
+# Contributing to Escape
 
-Thanks for your interest in AgenticMemo! This guide covers everything you need to
+Thanks for your interest in Escape! This guide covers everything you need to
 set up a development environment, make changes, and submit them.
+
+Escape retains the `agenticmemo` distribution and Python imports for compatibility.
 
 ## Project layout
 
 ```
 agenticmemo/          The framework package
 ├── core/             Agent, Planner, Executor (the main loop)
+├── plugin/           AgentMemory hooks, adapter, scoped SQLite persistence
 ├── memory/           Case model, temporal graph, hierarchical index, shared pool
 ├── retrieval/        Ensemble retriever, BM25, embeddings
 ├── learning/         GRPO policy, Reflexion, verifier, filters, hints, skills (ESMC), failure mining (CFM)
@@ -25,9 +28,12 @@ Requires Python 3.10+.
 ```bash
 git clone https://github.com/MTXOLABS/agenticmemo
 cd agenticmemo
-python -m venv .venv && source .venv/bin/activate   # .venv\Scripts\activate on Windows
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[all,dev]"
 ```
+
+The `AgentMemory` disk store currently supports macOS and Linux.
 
 ## Running tests
 
@@ -35,7 +41,8 @@ pip install -e ".[all,dev]"
 pytest tests/ -v
 ```
 
-The test suite uses fake LLMs and local embeddings — no API keys or network needed.
+The test suite uses fake LLMs and local embeddings. It needs no API keys; embedding
+tests need their model cached locally to run without network access.
 All tests must pass before a PR is merged.
 
 ## Linting

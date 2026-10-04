@@ -1,4 +1,4 @@
-"""AgenticMemo — Advanced agentic learning without LLM fine-tuning.
+"""Escape — Advanced agentic learning without LLM fine-tuning.
 
 Key innovations over original Memento:
   - Temporal Knowledge Graph memory (vs flat Case Bank)
@@ -34,6 +34,7 @@ from .exceptions import (
 from .learning import GRPOPolicy, OutcomeVerifier, ReflexionEngine, TrajectoryFilter
 from .llm import AnthropicLLM, LLMBackend, OpenAILLM
 from .memory import Case, CaseOutcome, HierarchicalMemory, TemporalGraphMemory
+from .plugin import AgentMemory, ExperienceInput, KnowledgeRecord, ValidationResult
 from .retrieval import EnsembleRetriever, SentenceTransformerEmbeddings
 from .tools import (
     FileReadTool,
@@ -64,6 +65,10 @@ __all__ = [
     "__license__",
     # Config
     "AgentConfig",
+    "AgentMemory",
+    "ExperienceInput",
+    "KnowledgeRecord",
+    "ValidationResult",
     "MemoryConfig",
     "RetrievalConfig",
     "LearningConfig",

@@ -1,18 +1,18 @@
-"""AgenticMemo Benchmark Runner
+"""Escape Benchmark Runner
 ================================
 
 Three modes:
 
   --research   (Recommended for research paper)
                Runs 5 configurations side-by-side:
-                 • Claude Standalone   (raw Claude, no AgenticMemo)
-                 • Claude + AgenticMemo
-                 • GPT Standalone      (raw GPT, no AgenticMemo)
-                 • GPT + AgenticMemo
-                 • Mock + AgenticMemo  (deterministic baseline)
+                 • Claude Standalone   (raw Claude, no Escape)
+                 • Claude + Escape
+                 • GPT Standalone      (raw GPT, no Escape)
+                 • GPT + Escape
+                 • Mock + Escape  (deterministic baseline)
                Produces a clear Δ-improvement table for every suite.
 
-  --compare    Quick comparison of available providers (all with AgenticMemo).
+  --compare    Quick comparison of available providers (all with Escape).
 
   (default)    Single-provider run. Use --provider to pick one.
 
@@ -24,7 +24,7 @@ Usage
     # Run just one suite:
     python -m benchmarks.run_benchmark --research --suite core
 
-    # Quick compare (all providers, AgenticMemo enabled):
+    # Quick compare (all providers, Escape enabled):
     python -m benchmarks.run_benchmark --compare
 
     # Single provider:
@@ -85,16 +85,16 @@ from .tasks import (
 # No mock — research mode uses only real LLM providers
 RESEARCH_CONFIGS: list[tuple[str, str, bool]] = [
     ("Claude Standalone",    "anthropic", False),
-    ("Claude + AgenticMemo", "anthropic", True),
+    ("Claude + Escape", "anthropic", True),
     ("GPT Standalone",       "openai",    False),
-    ("GPT + AgenticMemo",    "openai",    True),
+    ("GPT + Escape",    "openai",    True),
 ]
 
 _CONFIG_COLORS = {
     "Claude Standalone":    "red",
-    "Claude + AgenticMemo": "magenta",
+    "Claude + Escape": "magenta",
     "GPT Standalone":       "yellow",
-    "GPT + AgenticMemo":    "blue",
+    "GPT + Escape":    "blue",
 }
 
 _PROVIDER_COLORS = {
@@ -104,7 +104,7 @@ _PROVIDER_COLORS = {
 }
 
 _PROVIDER_LABELS = {
-    "mock":      "AgenticMemo (Mock)",
+    "mock":      "Escape (Mock)",
     "anthropic": "Anthropic (Claude)",
     "openai":    "OpenAI (GPT)",
 }
@@ -208,7 +208,7 @@ def make_agenticmemo_agent(
     model: str | None = None,
     fail_rate: float = 0.0,
 ) -> Agent:
-    """Full AgenticMemo stack — memory + GRPO + reflexion + hints."""
+    """Full Escape stack — memory + GRPO + reflexion + hints."""
     if provider == "mock":
         llm = MockLLM(fail_rate=fail_rate)
     else:
@@ -340,7 +340,7 @@ async def research_memory_transfer(
     """Suite 2: Memory transfer — warmup then repeat tasks.
 
     Standalone re-runs each task cold.
-    AgenticMemo retrieves relevant experience from warmup → should do better.
+    Escape retrieves relevant experience from warmup → should do better.
     """
     result = SuiteResult(name="Memory Transfer", config_label=config_label)
     agent = (
@@ -349,7 +349,7 @@ async def research_memory_transfer(
         make_standalone_agent(provider, api_key, model)
     )
 
-    # Warmup phase — both agents run these (AgenticMemo stores them, Standalone ignores)
+    # Warmup phase — both agents run these (Escape stores them, Standalone ignores)
     console.print(f"  [dim][{config_label}] Phase A: Warmup ({len(ALL_SOLO_TASKS)} tasks)...[/]")
     for bench in ALL_SOLO_TASKS:
         await run_task(agent, bench)
@@ -374,7 +374,7 @@ async def research_reflexion(
     """Suite 3: Failure recovery.
 
     Standalone has no reflexion — fails and stays failed.
-    AgenticMemo diagnoses failures, corrects, and retries.
+    Escape diagnoses failures, corrects, and retries.
     Uses fail_rate=0.7 for Mock; real LLMs rely on natural failures.
     """
     result = SuiteResult(name="Reflexion Recovery", config_label=config_label)
@@ -409,7 +409,7 @@ async def research_efficiency(
 ) -> SuiteResult:
     """Suite 4: Token/step efficiency after learning.
 
-    After warmup, AgenticMemo agents receive experience context that helps
+    After warmup, Escape agents receive experience context that helps
     them solve tasks in fewer steps and tokens.
     """
     result = SuiteResult(name="Efficiency (Steps & Tokens)", config_label=config_label)
@@ -419,7 +419,7 @@ async def research_efficiency(
         make_standalone_agent(provider, api_key, model)
     )
 
-    # Warmup (AgenticMemo builds memory, Standalone ignores)
+    # Warmup (Escape builds memory, Standalone ignores)
     if agenticmemo:
         console.print(f"  [dim][{config_label}] Warmup phase...[/]")
         for bench in ALL_SOLO_TASKS[:6]:
@@ -439,7 +439,7 @@ async def research_retrieval(
     config_label: str, provider: str, api_key: str | None,
     agenticmemo: bool, model: str | None,
 ) -> SuiteResult:
-    """Suite 5: Retrieval quality — ensemble vs semantic-only (AgenticMemo only).
+    """Suite 5: Retrieval quality — ensemble vs semantic-only (Escape only).
 
     Standalone has no retrieval so it scores 0 by definition.
     """
@@ -769,7 +769,7 @@ def print_research_comparison(
 ) -> None:
     """Print the core research comparison table."""
     console.print("\n")
-    console.rule("[bold green]Research Comparison: Standalone vs AgenticMemo")
+    console.rule("[bold green]Research Comparison: Standalone vs Escape")
 
     for suite_name in suite_names:
         suite_display = suite_name.replace("_", " ").title()
@@ -779,19 +779,19 @@ def print_research_comparison(
         t = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")
         t.add_column("Metric",              style="dim",    min_width=20)
         t.add_column("Claude\nStandalone",  justify="center")
-        t.add_column("Claude\n+AgenticMemo",justify="center")
+        t.add_column("Claude\n+Escape",justify="center")
         t.add_column("Δ Claude",            justify="center", min_width=9)
         t.add_column("GPT\nStandalone",     justify="center")
-        t.add_column("GPT\n+AgenticMemo",   justify="center")
+        t.add_column("GPT\n+Escape",   justify="center")
         t.add_column("Δ GPT",               justify="center", min_width=9)
 
         def _get(config_label: str) -> SuiteResult | None:
             return results.get(config_label, {}).get(suite_name)
 
         cs = _get("Claude Standalone")
-        cm = _get("Claude + AgenticMemo")
+        cm = _get("Claude + Escape")
         gs = _get("GPT Standalone")
-        gm = _get("GPT + AgenticMemo")
+        gm = _get("GPT + Escape")
 
         def _fmt_sr(r: SuiteResult | None) -> str:
             if r is None or r.tasks_total == 0: return "—"
@@ -858,8 +858,8 @@ def print_research_comparison(
     console.rule("[bold green]Overall Summary")
 
     configs_ordered = [
-        "Claude Standalone", "Claude + AgenticMemo",
-        "GPT Standalone",    "GPT + AgenticMemo",
+        "Claude Standalone", "Claude + Escape",
+        "GPT Standalone",    "GPT + Escape",
     ]
 
     t2 = Table(box=box.ROUNDED, show_header=True, header_style="bold")
@@ -902,7 +902,7 @@ def print_research_comparison(
         ccolor = _CONFIG_COLORS.get(label, "white")
         color  = _color(sr)
         # Compute improvement vs standalone
-        if "+AgenticMemo" in label:
+        if "+Escape" in label:
             prov = "anthropic" if "Claude" in label else "openai" if "GPT" in label else None
             base_sr = standalone_rates.get(prov) if prov else None
             if base_sr is not None:
@@ -999,11 +999,11 @@ async def run_research(args: argparse.Namespace) -> None:
     config_labels = [label for label, _, _ in active_configs]
     hard_note = " [bold yellow](HARD MODE — 18 algorithm/system-design problems)[/]" if "hard_core" in suite_names else ""
     console.print(Panel(
-        f"[bold cyan]AgenticMemo — Research Benchmark[/]{hard_note}\n"
+        f"[bold cyan]Escape — Research Benchmark[/]{hard_note}\n"
         f"[dim]Configurations : [white]{', '.join(config_labels)}[/]\n"
         f"Suites        : [white]{', '.join(suite_names)}[/]\n"
-        f"Goal          : [white]Standalone vs +AgenticMemo improvement (real LLMs only)[/][/]",
-        title="AgenticMemo Research",
+        f"Goal          : [white]Standalone vs +Escape improvement (real LLMs only)[/][/]",
+        title="Escape Research",
         border_style="cyan",
     ))
 
@@ -1077,7 +1077,7 @@ async def run_research(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Compare mode (quick, all providers with AgenticMemo)
+# Compare mode (quick, all providers with Escape)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def run_compare(args: argparse.Namespace) -> None:
@@ -1101,10 +1101,10 @@ async def run_compare(args: argparse.Namespace) -> None:
 
     provider_list = ", ".join(_PROVIDER_LABELS.get(p, p) for p in providers)
     console.print(Panel(
-        "[bold cyan]AgenticMemo Benchmark — Provider Comparison[/]\n"
+        "[bold cyan]Escape Benchmark — Provider Comparison[/]\n"
         f"[dim]Providers : [white]{provider_list}[/]\n"
         f"Suite(s)  : [white]{args.suite}[/][/]",
-        title="AgenticMemo",
+        title="Escape",
         border_style="cyan",
     ))
 
@@ -1169,11 +1169,11 @@ async def run_single(args: argparse.Namespace) -> None:
         else "mock-llm-v1"
     )
     console.print(Panel(
-        "[bold cyan]AgenticMemo Benchmark[/]\n"
+        "[bold cyan]Escape Benchmark[/]\n"
         f"[dim]Provider : [white]{args.provider}[/]\n"
         f"Model    : [white]{model_label}[/]\n"
         f"Suite(s) : [white]{args.suite}[/][/]",
-        title="AgenticMemo",
+        title="Escape",
         border_style="cyan",
     ))
 
@@ -1233,18 +1233,18 @@ async def main(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="AgenticMemo Benchmark Runner",
+        description="Escape Benchmark Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
 
     # ── Modes ────────────────────────────────────────────────────────────────
     p.add_argument("--research", action="store_true",
-                   help="Research mode: Standalone vs +AgenticMemo for each LLM (for paper)")
+                   help="Research mode: Standalone vs +Escape for each LLM (for paper)")
     p.add_argument("--compare", action="store_true",
-                   help="Compare all available providers (all with AgenticMemo)")
+                   help="Compare all available providers (all with Escape)")
     p.add_argument("--gpt-only", action="store_true", dest="gpt_only",
-                   help="Research mode: skip Claude, run only GPT Standalone vs GPT+AgenticMemo")
+                   help="Research mode: skip Claude, run only GPT Standalone vs GPT+Escape")
 
     # ── API keys ─────────────────────────────────────────────────────────────
     p.add_argument("--anthropic-key", default=None,

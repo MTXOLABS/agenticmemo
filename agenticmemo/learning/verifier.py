@@ -11,12 +11,14 @@ execution attempt:
   - "partial"  → incomplete, unverified, or only partially addresses it
   - "failure"  → wrong, off-topic, or the agent gave up
 
-Fail-soft: on any LLM/parse error the executor's tentative status is kept.
+Fail-soft: unavailable judgments are explicitly unknown, never successful.
 """
 
 from __future__ import annotations
 
 import json
+
+from pydantic import BaseModel
 
 from ..config import LearningConfig
 from ..llm.base import LLMBackend
@@ -48,6 +50,21 @@ _VERDICT_MAP = {
 }
 
 
+class VerificationResult(BaseModel):
+    """A completed judgment, or an unknown result when judging was unavailable."""
+
+    verdict: TaskStatus | None = None
+    reason: str = ""
+
+    @property
+    def verified(self) -> bool:
+        return self.verdict is not None
+
+    @property
+    def passed(self) -> bool:
+        return self.verdict == TaskStatus.SUCCESS
+
+
 class OutcomeVerifier:
     """LLM-as-judge verification of a completed trajectory.
 
@@ -63,13 +80,22 @@ class OutcomeVerifier:
     async def verify(self, task: str, trajectory: Trajectory) -> TaskStatus:
         """Return the verified TaskStatus for a trajectory.
 
-        Keeps the existing status when verification is disabled or the
-        judge call fails; an empty final answer is always a FAILURE.
+        Preserves the public return type. Unknown judgments map to PARTIAL,
+        or preserve an existing execution FAILURE; they never promote success.
         """
-        if not self._cfg.enable_verification:
-            return trajectory.status
+        result = await self.verify_detailed(task, trajectory)
+        if result.verdict is not None:
+            return result.verdict
+        return (
+            TaskStatus.FAILURE if trajectory.status == TaskStatus.FAILURE else TaskStatus.PARTIAL
+        )
+
+    async def verify_detailed(self, task: str, trajectory: Trajectory) -> VerificationResult:
+        """Return an explicit judgment without conflating errors with success."""
         if not trajectory.final_answer.strip():
-            return TaskStatus.FAILURE
+            return VerificationResult(verdict=TaskStatus.FAILURE, reason="Empty final answer.")
+        if not self._cfg.enable_verification:
+            return VerificationResult(reason="Verification disabled.")
 
         prompt = _VERIFY_PROMPT.format(
             task=task,
@@ -84,12 +110,19 @@ class OutcomeVerifier:
             start = raw.find("{")
             end = raw.rfind("}") + 1
             if start == -1 or end == 0:
-                return trajectory.status
+                return VerificationResult(reason="Malformed verification response.")
             data = json.loads(raw[start:end])
-            verdict = str(data.get("verdict", "")).lower().strip()
-            return _VERDICT_MAP.get(verdict, trajectory.status)
-        except Exception:
-            return trajectory.status
+            if not isinstance(data, dict):
+                return VerificationResult(reason="Malformed verification response.")
+            verdict = _VERDICT_MAP.get(str(data.get("verdict", "")).lower().strip())
+            if verdict is None:
+                return VerificationResult(reason="Unknown verification verdict.")
+            reason = data.get("reason", "")
+            if not isinstance(reason, str):
+                return VerificationResult(reason="Malformed verification reason.")
+            return VerificationResult(verdict=verdict, reason=reason[:500])
+        except Exception as exc:
+            return VerificationResult(reason=f"Verification unavailable ({type(exc).__name__}).")
 
     @staticmethod
     def _summarize(traj: Trajectory) -> str:

@@ -6,7 +6,7 @@ The Executor performs Stage 2 of the Planner-Executor loop:
   3. Stops when LLM produces a final answer (no tool call) or max_steps reached.
   4. Returns a completed Trajectory.
 
-AgenticMemo v2 — Dynamic Mid-Execution Retrieval (DMER):
+Escape v2 — Dynamic Mid-Execution Retrieval (DMER):
   At configurable step intervals the executor re-queries memory using the
   CURRENT execution state (task + recent observations) as the query.
   Retrieved hints are injected into the conversation as a SYSTEM-level

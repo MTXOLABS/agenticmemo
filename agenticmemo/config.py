@@ -1,4 +1,4 @@
-"""Global configuration for AgenticMemo."""
+"""Global configuration for Escape."""
 
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
-"""AgenticMemo custom exceptions."""
+"""Escape custom exceptions."""
 
 
 class AgenticMemoError(Exception):
-    """Base exception for all AgenticMemo errors."""
+    """Base exception for all Escape errors."""
 
 
 class LLMError(AgenticMemoError):

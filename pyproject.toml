@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agenticmemo"
 version = "2.0.0"
-description = "Memory-augmented LLM agents with DMER, CFM, and ESMC — no fine-tuning required"
+description = "Escape: reference knowledge and validated experience memory for Python agents"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

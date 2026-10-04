@@ -1,11 +1,11 @@
 ---
 name: benchmark
-description: Run AgenticMemo's benchmark suites correctly and put results in the right place. Use whenever the user asks to benchmark, measure performance, compare standalone vs memory-augmented agents, reproduce the paper/README numbers, or generate results for launch material — even if they just say "run the numbers" or "how much does memory help".
+description: Run Escape's benchmark suites correctly and put results in the right place. Use whenever the user asks to benchmark, measure performance, compare standalone vs memory-augmented agents, reproduce the paper/README numbers, or generate results for launch material — even if they just say "run the numbers" or "how much does memory help".
 ---
 
-# AgenticMemo Benchmarks
+# Escape Benchmarks
 
-The harness compares a standalone LLM against the same LLM + AgenticMemo memory.
+The harness compares a standalone LLM against the same LLM + Escape memory.
 Entry point: `python -m benchmarks.run_benchmark` (always via `.venv/bin/python`).
 
 ## Golden rules
@@ -26,7 +26,7 @@ Entry point: `python -m benchmarks.run_benchmark` (always via `.venv/bin/python`
 .venv/bin/python -m benchmarks.run_benchmark --provider mock \
   --suite core --output benchmarks/results/mock_core.json
 
-# The headline research comparison (Standalone vs +AgenticMemo) — real API, costs money
+# The headline research comparison (Standalone vs +Escape) — real API, costs money
 .venv/bin/python -m benchmarks.run_benchmark --research \
   --output benchmarks/results/research_$(date +%Y%m%d).json
 

@@ -1,14 +1,14 @@
-# Memory Packs — teach small models with expert solutions
+# Escape memory packs — reference solutions for the bundled agent
 
-A **memory pack** is a JSON file of verified solutions that any AgenticMemo agent
-can load as pre-built experience. An expert — a human or a frontier model — solves
-a class of tasks *once*; every agent that loads the pack retrieves those solutions
-as proven exemplars and adapts them instead of deriving from scratch.
+A **memory pack** is a JSON file of reference solutions that the bundled Escape
+`Agent` can load as experience. A human or model authors the solutions, and the
+application should verify them before loading. Retrieval can then supply them as
+examples for similar tasks. The package and imports remain `agenticmemo`.
 
-Measured effect (gpt-5.4-mini and gpt-4.1 on hard finance tasks, verification on):
-**40–56% fewer steps and 13–39% fewer tokens** on tasks similar to packed
-solutions. Memory packs make repeat work dramatically cheaper; they do not raise
-a model's ceiling on tasks far beyond its ability.
+Packs do not establish that a new answer is correct or guarantee lower costs.
+Evaluate their effect on separate held-out tasks with independent validation.
+The `AgentMemory` plug-in has a separate [legacy import path](PLUGIN_MEMORY.md#legacy-data)
+that records imported experience as unknown until the application validates it.
 
 ## Quick start
 
@@ -46,12 +46,13 @@ asyncio.run(main())
 
 - **task** — the task the solution solves, written the way users phrase it.
   Retrieval matches on this text, so realistic phrasing matters.
-- **domain** *(optional)* — one of AgenticMemo's memory domains (`finance`,
+- **domain** *(optional)* — one of Escape's memory domains (`finance`,
   `real_estate`, `coding`, ...). Defaults to `general`.
 - **code** — the verified working solution. Use the template convention below.
 - **answer** *(optional)* — the solution's output. Stored for bookkeeping but
   **never shown to the model**: models near their limit copy visible reference
-  answers instead of executing. AgenticMemo withholds outputs by design.
+  answers instead of executing. Escape withholds outputs by design in the bundled
+  runtime's reference rendering.
 
 ## The template convention (strongly recommended)
 
@@ -67,9 +68,9 @@ rate = 0.075
 ```
 
 When a template is detected, the agent instructs the model to **edit only the
-INPUTS block and execute** — turning adaptation into a trivial edit that even
-nano-class models perform reliably. Blob code without markers still works; the
-model adapts it free-form.
+INPUTS block and execute**. The application still needs to validate the resulting
+artifact and calculations. Without these markers, the model adapts the code
+free-form.
 
 ## Authoring rules that matter (learned from measurement)
 
